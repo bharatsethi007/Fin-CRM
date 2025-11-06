@@ -1,3 +1,4 @@
+
 import type { Client, Lead, Application, Task, Advisor, Document, Note, AuditTrailEntry, AIRecommendationResponse, OneRoofPropertyDetails, BankRates, Firm, CallTranscript, TaskComment } from '../types';
 import { LeadStatus, ApplicationStatus, ClientPortalStatus } from '../types';
 
@@ -75,7 +76,7 @@ const MOCK_DOCUMENTS: Document[] = [
   { id: 'doc4', firmId: 'firm_1', clientId: 'c2', name: 'Expired_ID_Ben_Cooper.pdf', category: 'ID', uploadDate: '2021-12-01', url: '#', expiryDate: '2023-12-31' },
 ];
 
-const MOCK_NOTES: Note[] = [
+let MOCK_NOTES: Note[] = [
   { 
     id: 'n1', firmId: 'firm_1', clientId: 'c1', applicationId: 'd1',
     content: 'Aroha called to ask about the progress of her application with ANZ. I told her we are waiting for the valuation report. @SarahChen to follow up on Friday.', 
@@ -87,6 +88,12 @@ const MOCK_NOTES: Note[] = [
     content: 'Initial meeting with Ivy went well. She is looking to purchase her first home in the next 3-6 months. Sent her a budget planner to complete.', 
     authorId: 'adv_3', authorName: 'Olivia Garcia', authorAvatarUrl: 'https://i.pravatar.cc/150?u=adv_3', 
     createdAt: '2024-07-20T11:00:00Z' 
+  },
+   {
+    id: 'n3', firmId: 'firm_1', clientId: 'c2',
+    content: 'Ben Cooper mentioned he might be getting a pay rise in the next quarter. This could improve his borrowing capacity significantly.',
+    authorId: 'adv_2', authorName: 'Sarah Chen', authorAvatarUrl: 'https://i.pravatar.cc/150?u=adv_2',
+    createdAt: '2024-07-25T15:00:00Z'
   },
 ];
 
@@ -110,6 +117,26 @@ let MOCK_CALL_TRANSCRIPTS: CallTranscript[] = [
             "Aroha to request an employment confirmation letter from HR.",
             "Liam to follow up if documents are not received in two days."
         ]
+    },
+    {
+        id: 'ct2',
+        firmId: 'firm_1',
+        clientId: 'c2',
+        timestamp: '2024-07-26T11:30:00Z',
+        duration: 185,
+        transcript: "Sarah: Hi Ben, Sarah here. Just following up on the conditional approval. Ben: Hi Sarah, yeah I saw the email. What does 'conditional' mean exactly? Sarah: It just means the bank is happy with your profile, they just need to see the valuation report for the property before they give the final sign-off. Ben: Ah, I see. Has that been ordered? Sarah: Yes, it has. We expect it back in the next 3 to 5 working days. I'll let you know as soon as I have it. Ben: Perfect, thanks for clarifying.",
+        summary: "Sarah Chen called Ben Cooper to discuss his conditional loan approval. She explained that the only outstanding condition is the property valuation report, which has been ordered and is expected within 3-5 business days.",
+        actionItems: [ "Sarah to monitor for the valuation report.", "Sarah to update Ben once the report is received." ],
+        notes: "Client was initially confused about the conditional approval status but is now clear on the next steps."
+    },
+    {
+        id: 'ct3',
+        firmId: 'firm_1',
+        timestamp: '2024-07-27T09:00:00Z',
+        duration: 240,
+        transcript: "Caller: Hi, I was on your website and I'm interested in getting a home loan. My name's Chloe. Bruce: Hi Chloe, Bruce speaking. Thanks for calling. Are you a first home buyer? Chloe: Yes, I am. It's all a bit overwhelming. I'm not sure where to start. Bruce: Not to worry, that's what we're here for. The first step would be to schedule a brief chat to understand your situation. Do you have some time free tomorrow? Chloe: Yes, tomorrow afternoon works. Bruce: Great, I'll send you a calendar invitation for 2pm. I'll also send you a link to our online fact-find form. If you could fill that out beforehand, it will help us make the most of our time. Chloe: Sounds good. Thanks, Bruce.",
+        summary: "An inbound call was received from a new lead, Chloe, who is a first home buyer. She expressed uncertainty about the home loan process. Bruce Wayne scheduled a meeting for the following day at 2pm and sent her an online fact-find form to complete prior to the meeting.",
+        actionItems: [ "Bruce to send calendar invite to Chloe for 2pm.", "Bruce to send link to online fact-find form.", "Chloe to complete fact-find form before the meeting." ]
     }
 ];
 
@@ -432,6 +459,13 @@ export const crmService = {
     return mockApiCall(undefined);
   },
 
+  getAllCallTranscripts: (): Promise<CallTranscript[]> => {
+    if (!currentFirm) return mockApiCall([]);
+    const transcripts = MOCK_CALL_TRANSCRIPTS.filter(ct => ct.firmId === currentFirm!.id)
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return mockApiCall(transcripts);
+  },
+
   getCallTranscriptsForClient: (clientId: string): Promise<CallTranscript[]> => {
     if (!currentFirm) return mockApiCall([]);
     const transcripts = MOCK_CALL_TRANSCRIPTS.filter(ct => ct.clientId === clientId && ct.firmId === currentFirm!.id)
@@ -448,13 +482,47 @@ export const crmService = {
     };
     MOCK_CALL_TRANSCRIPTS.unshift(newTranscript);
     
-    crmService.addAuditTrailEntry({
-        clientId: transcriptData.clientId,
-        userName: `${currentUser.name} (via Talk Intelligence)`,
-        userAvatarUrl: currentUser.avatarUrl,
-        action: `logged a call transcript. Duration: ${Math.floor(transcriptData.duration / 60)}m ${transcriptData.duration % 60}s.`
-    });
+    if (transcriptData.clientId) {
+        crmService.addAuditTrailEntry({
+            clientId: transcriptData.clientId,
+            userName: `${currentUser.name} (via Talk Intelligence)`,
+            userAvatarUrl: currentUser.avatarUrl,
+            action: `logged a call transcript. Duration: ${Math.floor(transcriptData.duration / 60)}m ${transcriptData.duration % 60}s.`
+        });
+    }
     return mockApiCall(newTranscript);
+  },
+
+  updateCallTranscript: async (callId: string, updates: { clientId?: string; notes?: string }): Promise<CallTranscript> => {
+    if (!currentUser || !currentFirm) return Promise.reject("Not logged in");
+    const callIndex = MOCK_CALL_TRANSCRIPTS.findIndex(c => c.id === callId);
+    if (callIndex > -1) {
+        const originalCall = { ...MOCK_CALL_TRANSCRIPTS[callIndex] };
+        MOCK_CALL_TRANSCRIPTS[callIndex] = { ...MOCK_CALL_TRANSCRIPTS[callIndex], ...updates };
+
+        if (updates.clientId && !originalCall.clientId) {
+            await crmService.addAuditTrailEntry({
+                clientId: updates.clientId,
+                userName: currentUser.name,
+                userAvatarUrl: currentUser.avatarUrl,
+                action: `associated a call from ${new Date(originalCall.timestamp).toLocaleDateString()} with this record.`
+            });
+        }
+        
+        if (updates.notes !== undefined && updates.notes !== (originalCall.notes || '')) {
+             if (MOCK_CALL_TRANSCRIPTS[callIndex].clientId) {
+                 await crmService.addAuditTrailEntry({
+                    clientId: MOCK_CALL_TRANSCRIPTS[callIndex].clientId!,
+                    userName: currentUser.name,
+                    userAvatarUrl: currentUser.avatarUrl,
+                    action: `added a note to a call from ${new Date(originalCall.timestamp).toLocaleDateString()}.`
+                });
+             }
+        }
+
+        return mockApiCall(MOCK_CALL_TRANSCRIPTS[callIndex]);
+    }
+    return Promise.reject('Call transcript not found');
   },
 
   getTaskComments: (taskId: string): Promise<TaskComment[]> => {

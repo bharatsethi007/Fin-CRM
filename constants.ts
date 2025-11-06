@@ -29,9 +29,9 @@ export const SIDEBAR_NAV_ITEMS: NavSection[] = [
     defaultOpen: true,
     items: [
       { id: 'tasks', name: 'Tasks', icon: 'CheckSquare', view: 'tasks' },
-      { id: 'notes', name: 'Notes', icon: 'FileText', view: 'dashboard' }, // placeholder
+      { id: 'notes', name: 'Notes', icon: 'FileText', view: 'notes' },
       { id: 'emails', name: 'Emails', icon: 'Mail', view: 'emails' },
-      { id: 'calls', name: 'Calls', icon: 'PhoneCall', view: 'dashboard' }, // placeholder
+      { id: 'calls', name: 'Calls', icon: 'PhoneCall', view: 'calls' },
       { id: 'clients', name: 'Clients', icon: 'Users', view: 'clients' },
       { id: 'leads', name: 'Leads', icon: 'Users', view: 'leads' },
       { id: 'deals', name: 'Deals', icon: 'DollarSign', view: 'applications' },

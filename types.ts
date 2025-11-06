@@ -215,10 +215,11 @@ export interface AIComplianceResult {
 export interface CallTranscript {
   id: string;
   firmId: string;
-  clientId: string;
+  clientId?: string;
   timestamp: string;
   duration: number; // in seconds
   transcript: string;
   summary: string;
   actionItems: string[];
+  notes?: string;
 }

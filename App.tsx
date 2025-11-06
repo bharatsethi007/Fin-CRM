@@ -15,6 +15,8 @@ import type { Advisor, Firm } from './types';
 import LoginScreen from './components/pages/LoginScreen';
 import { crmService } from './services/crmService';
 import SettingsPage from './components/pages/SettingsPage';
+import NotesPage from './components/pages/NotesPage';
+import CallsPage from './components/pages/CallsPage';
 
 const findViewName = (view: string): string => {
     for (const section of SIDEBAR_NAV_ITEMS) {
@@ -76,6 +78,10 @@ const App: React.FC = () => {
         return <TaskList />;
       case 'emails':
         return <EmailPage setCurrentView={setCurrentView} />;
+      case 'notes':
+        return <NotesPage />;
+      case 'calls':
+        return <CallsPage />;
       default:
         return <Dashboard setCurrentView={setCurrentView} navigateToClient={navigateToClient} />;
     }

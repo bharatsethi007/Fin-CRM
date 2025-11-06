@@ -1,9 +1,10 @@
+
 import React from 'react';
 import { Icon, IconName } from './Icon';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   children: React.ReactNode;
-  variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
+  variant?: 'primary' | 'secondary' | 'danger' | 'ghost' | 'subtle';
   // FIX: Add size prop to allow for different button sizes.
   size?: 'sm' | 'md' | 'lg';
   leftIcon?: IconName;
@@ -37,6 +38,7 @@ export const Button: React.FC<ButtonProps> = ({
     secondary: 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 focus:ring-primary-500',
     danger: 'border-transparent bg-red-600 text-white hover:bg-red-700 focus:ring-red-500',
     ghost: 'border-transparent bg-transparent text-primary-600 hover:bg-primary-100 dark:hover:bg-primary-900/20 focus:ring-primary-500',
+    subtle: 'border-transparent bg-transparent text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 focus:ring-primary-500',
   };
 
   return (
