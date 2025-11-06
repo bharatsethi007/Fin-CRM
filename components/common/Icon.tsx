@@ -4,7 +4,13 @@ import {
   PlusCircle, Search, Bell, Sun, Moon, ChevronDown, ChevronUp, X, Filter, 
   Calendar, ArrowRight, Bot, Send, Loader, Menu, Banknote, Building,
   ArrowLeft, Mail, Phone, Home, TrendingUp, TrendingDown, RefreshCw,
-  FileText, Download, Pencil, FilePlus2, Sparkles
+  FileText, Download, Pencil, FilePlus2, Sparkles, Info, Wifi, Frame,
+  LandPlot, Layers3, FileBadge2, CalendarDays, Mountain, Construction,
+  ShieldCheck, LayoutPanelTop, Landmark, BookKey, Scale, Wallet, PiggyBank,
+  Percent, UserCog, ShieldAlert, ClipboardCheck, FileSignature, PhoneCall, Mic, Square,
+  Paintbrush, Database, UserPlus, Settings, Gem, CreditCard, Code2, Headset, 
+  DatabaseBackup, AppWindow, KeyRound, HelpCircle, Command, BarChart3, Play,
+  GitFork, Star, Building2, DollarSign, List, Plus
 } from 'lucide-react';
 import type { LucideProps } from 'lucide-react';
 
@@ -14,7 +20,13 @@ const ICONS = {
   PlusCircle, Search, Bell, Sun, Moon, ChevronDown, ChevronUp, X, Filter, 
   Calendar, ArrowRight, Bot, Send, Loader, Menu, Banknote, Building,
   ArrowLeft, Mail, Phone, Home, TrendingUp, TrendingDown, RefreshCw,
-  FileText, Download, Pencil, FilePlus2, Sparkles
+  FileText, Download, Pencil, FilePlus2, Sparkles, Info, Wifi, Frame,
+  LandPlot, Layers3, FileBadge2, CalendarDays, Mountain, Construction,
+  ShieldCheck, LayoutPanelTop, Landmark, BookKey, Scale, Wallet, PiggyBank,
+  Percent, UserCog, ShieldAlert, ClipboardCheck, FileSignature, PhoneCall, Mic, Square,
+  Paintbrush, Database, UserPlus, Settings, Gem, CreditCard, Code2, Headset, 
+  DatabaseBackup, AppWindow, KeyRound, HelpCircle, Command, BarChart3, Play,
+  GitFork, Star, Building2, DollarSign, List, Plus
 } as const;
 
 export type IconName = keyof typeof ICONS;

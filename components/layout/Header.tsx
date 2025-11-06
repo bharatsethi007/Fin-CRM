@@ -1,21 +1,35 @@
-
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Icon } from '../common/Icon';
+import type { Advisor } from '../../types';
 
 interface HeaderProps {
   title: string;
   isDarkMode: boolean;
   toggleDarkMode: () => void;
-  toggleSidebar: () => void;
+  advisor: Advisor;
+  onLogout: () => void;
+  setCurrentView: (view: string) => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ title, isDarkMode, toggleDarkMode, toggleSidebar }) => {
+export const Header: React.FC<HeaderProps> = ({ title, isDarkMode, toggleDarkMode, advisor, onLogout, setCurrentView }) => {
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+        if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+            setIsDropdownOpen(false);
+        }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+        document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [dropdownRef]);
+
   return (
     <header className="flex items-center justify-between h-20 bg-white dark:bg-gray-800 px-6 border-b border-gray-200 dark:border-gray-700">
       <div className="flex items-center">
-        <button onClick={toggleSidebar} className="text-gray-500 dark:text-gray-400 focus:outline-none mr-4">
-            <Icon name="Menu" className="h-6 w-6"/>
-        </button>
         <h1 className="text-2xl font-semibold text-gray-800 dark:text-white">{title}</h1>
       </div>
 
@@ -37,16 +51,37 @@ export const Header: React.FC<HeaderProps> = ({ title, isDarkMode, toggleDarkMod
           <Icon name="Bell" className="h-6 w-6" />
         </button>
 
-        <div className="flex items-center">
-            <img 
-                className="h-10 w-10 rounded-full object-cover" 
-                src="https://picsum.photos/id/237/200/200" 
-                alt="Advisor Avatar"
-            />
-            <div className="ml-3 hidden md:block">
-                <p className="text-sm font-medium text-gray-800 dark:text-white">Liam Wilson</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">Advisor</p>
-            </div>
+        <div className="relative">
+            <button 
+                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                className="flex items-center p-1 rounded-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-100 dark:focus:ring-offset-gray-800 focus:ring-primary-500"
+            >
+                <img 
+                    className="h-10 w-10 rounded-full object-cover" 
+                    src={advisor.avatarUrl}
+                    alt="Advisor Avatar"
+                />
+                <div className="ml-3 hidden md:block text-left">
+                    <p className="text-sm font-medium text-gray-800 dark:text-white">{advisor.name}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 capitalize">{advisor.role}</p>
+                </div>
+                <Icon name="ChevronDown" className="ml-1 h-4 w-4 text-gray-500 dark:text-gray-400" />
+            </button>
+            {isDropdownOpen && (
+                <div ref={dropdownRef} className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-md shadow-lg z-20 border dark:border-gray-700 py-1">
+                    <a href="#" onClick={(e) => { e.preventDefault(); setCurrentView('settings:profile'); setIsDropdownOpen(false); }} className="flex items-center px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">
+                        <Icon name="Settings" className="mr-3 h-5 w-5"/>
+                        Settings
+                    </a>
+                    <button 
+                        onClick={onLogout} 
+                        className="w-full text-left flex items-center px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+                    >
+                        <Icon name="ArrowLeft" className="mr-3 h-5 w-5"/>
+                        Logout
+                    </button>
+                </div>
+            )}
         </div>
       </div>
     </header>

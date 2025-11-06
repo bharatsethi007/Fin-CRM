@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, LabelList } from 'recharts';
 import { Card } from '../common/Card';
-import { Icon } from '../common/Icon';
+import { Icon, IconName } from '../common/Icon';
 import { Button } from '../common/Button';
 import { crmService } from '../../services/crmService';
-import type { Application } from '../../types';
+import type { Application, BankRates } from '../../types';
 import { ApplicationStatus } from '../../types';
 
 
@@ -39,6 +39,7 @@ const StatCard: React.FC<{ icon: any; title: string; value: string; change: stri
 
 const ApplicationStatusBadge: React.FC<{ status: ApplicationStatus }> = ({ status }) => {
   const statusClasses = {
+    [ApplicationStatus.Draft]: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200',
     [ApplicationStatus.ApplicationSubmitted]: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
     [ApplicationStatus.ConditionalApproval]: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
     [ApplicationStatus.UnconditionalApproval]: 'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200',
@@ -64,6 +65,24 @@ const StatusDetailBadge: React.FC<{ status: 'Active' | 'Needs Attention' | 'On H
             <span className={`w-2 h-2 mr-1.5 rounded-full ${dotClasses[status]}`}></span>
             {status}
         </span>
+    );
+};
+
+const RiskBadge: React.FC<{ risk: Application['riskLevel'] }> = ({ risk }) => {
+    if (!risk) return null;
+    const riskConfig: Record<NonNullable<Application['riskLevel']>, { icon: IconName, color: string, text: string }> = {
+        'Low': { icon: 'ShieldCheck', color: 'text-green-500', text: 'Low risk of delay' },
+        'Medium': { icon: 'ShieldAlert', color: 'text-yellow-500', text: 'Medium risk of delay' },
+        'High': { icon: 'ShieldAlert', color: 'text-red-500', text: 'High risk of delay or decline' },
+    };
+    const config = riskConfig[risk];
+    return (
+        <div className="group relative flex items-center">
+             <Icon name={config.icon} className={`h-5 w-5 ${config.color}`} />
+             <span className="absolute left-1/2 -translate-x-1/2 -top-8 w-max px-2 py-1 bg-gray-700 text-white text-xs rounded-md shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                {config.text}
+            </span>
+        </div>
     );
 };
 
@@ -102,20 +121,40 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 
 const Dashboard: React.FC<DashboardProps> = ({ setCurrentView, navigateToClient }) => {
   const [applications, setApplications] = useState<Application[]>([]);
+  const [interestRates, setInterestRates] = useState<BankRates[]>([]);
   const [isLoadingApplications, setIsLoadingApplications] = useState(true);
+  const [isLoadingRates, setIsLoadingRates] = useState(true);
   const [filter, setFilter] = useState<'All' | 'Needs Attention' | 'On Hold' | 'Active'>('All');
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const filterRef = useRef<HTMLDivElement>(null);
   const [currentPage, setCurrentPage] = useState(1);
   
+  const fetchRates = () => {
+    setIsLoadingRates(true);
+    crmService.getCurrentInterestRates().then(data => {
+        setInterestRates(data);
+        setIsLoadingRates(false);
+    });
+  }
+
   useEffect(() => {
-    crmService.getApplications().then(data => {
-        // We only need open applications for both the table and the new chart
+    setIsLoadingApplications(true);
+    setIsLoadingRates(true);
+
+    const fetchApps = crmService.getApplications().then(data => {
         const openApplications = data.filter(app => 
             app.status !== ApplicationStatus.Settled && app.status !== ApplicationStatus.Declined
         );
         setApplications(openApplications);
+    });
+
+    const fetchInitialRates = crmService.getCurrentInterestRates().then(data => {
+        setInterestRates(data);
+    });
+
+    Promise.all([fetchApps, fetchInitialRates]).finally(() => {
         setIsLoadingApplications(false);
+        setIsLoadingRates(false);
     });
   }, []);
 
@@ -163,17 +202,14 @@ const Dashboard: React.FC<DashboardProps> = ({ setCurrentView, navigateToClient 
   const advisorLoanData = useMemo(() => {
     if (!applications.length) return [];
     
-    // FIX: Using the generic form of reduce to explicitly set the accumulator's type.
-    // This ensures `advisorCounts` is correctly typed as Record<string, number>,
-    // which in turn ensures `loans` is inferred as a number in the subsequent `map` and `sort` operations,
-    // resolving the arithmetic operation error.
     const advisorCounts = applications.reduce<Record<string, number>>((acc, app) => {
         const advisorName = app.updatedByName;
         acc[advisorName] = (acc[advisorName] || 0) + 1;
         return acc;
     }, {});
 
-    return Object.entries(advisorCounts).map(([name, loans]) => ({ name, loans })).sort((a,b) => b.loans - a.loans);
+    // FIX: Explicitly convert loans to a number to satisfy TypeScript's strict arithmetic operation rules, which can fail with complex type inferences.
+    return Object.entries(advisorCounts).map(([name, loans]) => ({ name, loans: Number(loans) })).sort((a,b) => b.loans - a.loans);
   }, [applications]);
 
   const handleFilterChange = (newFilter: typeof filter) => {
@@ -323,6 +359,46 @@ const Dashboard: React.FC<DashboardProps> = ({ setCurrentView, navigateToClient 
         </Card>
 
         <Card className="lg:col-span-3">
+            <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold flex items-center">
+                    <Icon name="Percent" className="h-5 w-5 mr-2 text-primary-500" />
+                    Current Interest Rates
+                </h3>
+                <Button variant="ghost" size="sm" onClick={fetchRates} isLoading={isLoadingRates} leftIcon="RefreshCw">
+                    Refresh
+                </Button>
+            </div>
+            {isLoadingRates ? (
+                <div className="flex justify-center items-center h-24">
+                    <Icon name="Loader" className="h-6 w-6 animate-spin text-primary-500" />
+                </div>
+            ) : (
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left">
+                        <thead className="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+                            <tr>
+                                <th scope="col" className="px-4 py-2">Lender</th>
+                                {interestRates[0]?.rates.map(rate => (
+                                    <th key={rate.term} scope="col" className="px-4 py-2 text-center">{rate.term}</th>
+                                ))}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {interestRates.map(bank => (
+                                <tr key={bank.lender} className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 last:border-b-0">
+                                    <td className="px-4 py-2 font-semibold text-gray-900 dark:text-white">{bank.lender}</td>
+                                    {bank.rates.map(rate => (
+                                        <td key={rate.term} className="px-4 py-2 text-center">{rate.rate.toFixed(2)}%</td>
+                                    ))}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </Card>
+
+        <Card className="lg:col-span-3">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-lg font-semibold">All Mortgages</h3>
              <div className="relative" ref={filterRef}>
@@ -354,6 +430,7 @@ const Dashboard: React.FC<DashboardProps> = ({ setCurrentView, navigateToClient 
                             <th scope="col" className="px-6 py-3">Status</th>
                             <th scope="col" className="px-6 py-3">Last Updated</th>
                             <th scope="col" className="px-6 py-3">Updated By</th>
+                            <th scope="col" className="px-6 py-3">Risk</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -365,6 +442,7 @@ const Dashboard: React.FC<DashboardProps> = ({ setCurrentView, navigateToClient 
                                 <td className="px-6 py-4"><StatusDetailBadge status={app.status_detail} /></td>
                                 <td className="px-6 py-4">{timeAgo(app.lastUpdated)}</td>
                                 <td className="px-6 py-4">{app.updatedByName}</td>
+                                <td className="px-6 py-4"><RiskBadge risk={app.riskLevel} /></td>
                             </tr>
                         ))}
                     </tbody>

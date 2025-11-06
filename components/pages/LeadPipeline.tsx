@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { crmService } from '../../services/crmService';
 import type { Lead } from '../../types';
@@ -8,19 +7,38 @@ import { Card } from '../common/Card';
 import { Icon } from '../common/Icon';
 import { Button } from '../common/Button';
 
-const LeadCard: React.FC<{ lead: Lead }> = ({ lead }) => (
-  <div className="p-3 mb-3 bg-gray-100 dark:bg-gray-700 rounded-md shadow-sm">
-    <p className="font-semibold text-sm">{lead.name}</p>
-    <p className="text-xs text-gray-500 dark:text-gray-400">{lead.email}</p>
-    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-      Loan: ${lead.estimatedLoanAmount.toLocaleString()}
-    </p>
-    <div className="flex items-center justify-between mt-2">
-      <span className="text-xs text-gray-400">{lead.source}</span>
-      <img src={lead.avatarUrl} alt={lead.name} className="h-6 w-6 rounded-full" />
-    </div>
-  </div>
-);
+const LeadCard: React.FC<{ lead: Lead }> = ({ lead }) => {
+    const probability = lead.conversionProbability || 0;
+    const getBarColor = (p: number) => {
+        if (p > 0.7) return 'bg-green-500';
+        if (p > 0.4) return 'bg-yellow-500';
+        return 'bg-red-500';
+    };
+
+    return (
+        <div className="p-3 mb-3 bg-gray-100 dark:bg-gray-700 rounded-md shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+                <p className="font-semibold text-sm">{lead.name}</p>
+                <img src={lead.avatarUrl} alt={lead.name} className="h-6 w-6 rounded-full" />
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400">{lead.email}</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Loan: ${lead.estimatedLoanAmount.toLocaleString()}
+            </p>
+            <div className="mt-3">
+                <div className="flex justify-between items-center mb-1">
+                    <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Conversion Probability</span>
+                    <span className={`text-xs font-bold ${getBarColor(probability).replace('bg-', 'text-')}`}>
+                        {(probability * 100).toFixed(0)}%
+                    </span>
+                </div>
+                <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-1.5">
+                    <div className={`${getBarColor(probability)} h-1.5 rounded-full`} style={{ width: `${probability * 100}%` }}></div>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 const LeadPipeline: React.FC = () => {
   const [leads, setLeads] = useState<Lead[]>([]);

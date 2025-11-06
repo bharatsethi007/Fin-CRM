@@ -42,6 +42,17 @@ const ClientList: React.FC<ClientListProps> = ({ initialClientId, clearInitialCl
       client.email.toLowerCase().includes(searchTerm.toLowerCase())
     );
   }, [clients, searchTerm]);
+  
+  const handleNewApplication = async (client: Client) => {
+    try {
+      await crmService.createDraftApplication(client.id, client.name);
+      setClientForNewApplication(client);
+      setSelectedClient(null);
+    } catch (error) {
+      console.error("Failed to create draft application:", error);
+      alert("Could not create a draft application. Please try again.");
+    }
+  };
 
   if (clientForNewApplication) {
     return (
@@ -60,10 +71,7 @@ const ClientList: React.FC<ClientListProps> = ({ initialClientId, clearInitialCl
       <ClientDetail 
         client={selectedClient} 
         onBack={() => setSelectedClient(null)} 
-        onNewApplicationClick={() => {
-            setClientForNewApplication(selectedClient);
-            setSelectedClient(null);
-        }}
+        onNewApplicationClick={() => handleNewApplication(selectedClient)}
       />
     );
   }

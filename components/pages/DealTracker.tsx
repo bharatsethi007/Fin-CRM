@@ -4,13 +4,36 @@ import type { Application } from '../../types';
 import { ApplicationStatus } from '../../types';
 import { APPLICATION_STATUS_COLUMNS } from '../../constants';
 import { Card } from '../common/Card';
-import { Icon } from '../common/Icon';
+import { Icon, IconName } from '../common/Icon';
 import { Button } from '../common/Button';
+
+const RiskBadge: React.FC<{ risk: Application['riskLevel'] }> = ({ risk }) => {
+    if (!risk) return null;
+    const riskConfig: Record<NonNullable<Application['riskLevel']>, { icon: IconName, color: string, text: string }> = {
+        'Low': { icon: 'ShieldCheck', color: 'text-green-500', text: 'Low risk' },
+        'Medium': { icon: 'ShieldAlert', color: 'text-yellow-500', text: 'Medium risk' },
+        'High': { icon: 'ShieldAlert', color: 'text-red-500', text: 'High risk' },
+    };
+    const config = riskConfig[risk];
+    return (
+        <div className="group relative flex items-center">
+             <Icon name={config.icon} className={`h-5 w-5 ${config.color}`} />
+             <span className="absolute -top-7 left-1/2 -translate-x-1/2 w-max px-2 py-1 bg-gray-700 text-white text-xs rounded-md shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                {config.text}
+            </span>
+        </div>
+    );
+};
 
 const ApplicationCard: React.FC<{ application: Application }> = ({ application }) => (
   <div className="p-3 mb-3 bg-gray-100 dark:bg-gray-700 rounded-md shadow-sm">
-    <p className="font-semibold text-sm">{application.clientName}</p>
-    <p className="text-xs text-gray-500 dark:text-gray-400">{application.lender}</p>
+    <div className="flex justify-between items-start">
+        <div>
+            <p className="font-semibold text-sm">{application.clientName}</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">{application.lender}</p>
+        </div>
+        <RiskBadge risk={application.riskLevel} />
+    </div>
     <p className="text-sm font-bold text-gray-800 dark:text-gray-200 mt-1">
       ${application.loanAmount.toLocaleString()}
     </p>

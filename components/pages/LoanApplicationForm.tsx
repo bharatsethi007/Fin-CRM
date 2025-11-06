@@ -1,17 +1,27 @@
 import React, { useState, useEffect } from 'react';
-import type { Client, Document } from '../../types';
+import type { Client, Document, AIRecommendationResponse, OneRoofPropertyDetails, BankRates } from '../../types';
 import { Button } from '../common/Button';
-import { Icon } from '../common/Icon';
+import { Icon, IconName } from '../common/Icon';
 import { Card } from '../common/Card';
 import { crmService } from '../../services/crmService';
+import { geminiService } from '../../services/geminiService';
 
 interface LoanApplicationFormProps {
   client: Client;
   onBack: () => void;
 }
 
-const LENDERS = ['ASB', 'BNZ', 'ANZ', 'Westpac', 'Kiwi Bank'];
 const LOAN_PURPOSES = ['First Home Purchase', 'Next Home Purchase', 'Investment Property', 'Refinance', 'Top-up'];
+
+const PropertyDetailItem: React.FC<{icon: IconName, label: string, value: string | React.ReactNode}> = ({icon, label, value}) => (
+    <div className="flex items-start">
+        <Icon name={icon} className="h-5 w-5 mr-3 text-gray-400 flex-shrink-0 mt-0.5" />
+        <div>
+            <p className="font-medium text-gray-500 dark:text-gray-400">{label}</p>
+            <p className="font-semibold">{value}</p>
+        </div>
+    </div>
+);
 
 const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, onBack }) => {
     const [lendingDetails, setLendingDetails] = useState({
@@ -19,24 +29,71 @@ const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, onBac
         purpose: LOAN_PURPOSES[0],
         term: 30,
     });
-    const [propertyAddress, setPropertyAddress] = useState('');
+    const [propertyAddress, setPropertyAddress] = useState('51 Kent Terrace, Riverhead, Rodney');
     const [propertyValue, setPropertyValue] = useState<number | null>(null);
+    const [propertyDetails, setPropertyDetails] = useState<OneRoofPropertyDetails | null>(null);
     const [isSearchingProperty, setIsSearchingProperty] = useState(false);
     const [selectedLenders, setSelectedLenders] = useState<string[]>([]);
     const [documents, setDocuments] = useState<Document[]>([]);
     const [isLoadingDocs, setIsLoadingDocs] = useState(true);
+    const [aiRecommendation, setAiRecommendation] = useState<AIRecommendationResponse | null>(null);
+    const [isRecommending, setIsRecommending] = useState(false);
+    const [recommendationError, setRecommendationError] = useState<string | null>(null);
+    const [interestRates, setInterestRates] = useState<BankRates[]>([]);
+    const [isLoadingRates, setIsLoadingRates] = useState(true);
+
+    const fetchRecommendation = async (rates: BankRates[]) => {
+        setIsRecommending(true);
+        setRecommendationError(null);
+        setAiRecommendation(null);
+        setSelectedLenders([]);
+        try {
+            const result = await geminiService.getLenderRecommendation(client, lendingDetails, rates);
+            const recommendationId = `rec_${client.id}_${Date.now()}`;
+            const fullRecommendation = { ...result, recommendationId };
+            await crmService.saveLenderRecommendation(client.id, fullRecommendation);
+            setAiRecommendation(fullRecommendation);
+        } catch (error) {
+            console.error(error);
+            setRecommendationError('Failed to generate AI recommendation. Please try again.');
+        } finally {
+            setIsRecommending(false);
+        }
+    };
+
+    const handleRefreshRecommendation = () => {
+        if (interestRates.length > 0) {
+            fetchRecommendation(interestRates);
+        }
+    };
 
     useEffect(() => {
-        setIsLoadingDocs(true);
-        crmService.getDocuments()
-            .then(allDocs => {
-                setDocuments(allDocs.filter(doc => doc.clientId === client.id));
+        const loadInitialData = async () => {
+            setIsRecommending(true);
+            setIsLoadingDocs(true);
+            setIsLoadingRates(true);
+
+            try {
+                const [docs, rates] = await Promise.all([
+                    crmService.getDocuments(),
+                    crmService.getCurrentInterestRates()
+                ]);
+                
+                setDocuments(docs.filter(doc => doc.clientId === client.id));
+                setInterestRates(rates);
+                
+                await fetchRecommendation(rates);
+
+            } catch (error) {
+                console.error("Failed to fetch initial data:", error);
+                setRecommendationError("Failed to load initial application data.");
+            } finally {
                 setIsLoadingDocs(false);
-            })
-            .catch(error => {
-                console.error("Failed to fetch documents:", error);
-                setIsLoadingDocs(false);
-            });
+                setIsLoadingRates(false);
+            }
+        };
+
+        loadInitialData();
     }, [client.id]);
 
     const handleLendingChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -44,14 +101,24 @@ const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, onBac
         setLendingDetails(prev => ({ ...prev, [name]: name === 'loanAmount' || name === 'term' ? Number(value) : value }));
     };
 
-    const handlePropertySearch = () => {
+    const handlePropertySearch = async () => {
         if (!propertyAddress.trim()) return;
         setIsSearchingProperty(true);
-        // Simulate API call to Core Logic
-        setTimeout(() => {
-            setPropertyValue(Math.floor(Math.random() * (1500000 - 700000 + 1)) + 700000);
+        setPropertyValue(null);
+        setPropertyDetails(null);
+
+        try {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            const mockValue = Math.floor(Math.random() * (1500000 - 700000 + 1)) + 700000;
+            setPropertyValue(mockValue);
+
+            const details = await crmService.getOneRoofPropertyDetails(propertyAddress);
+            setPropertyDetails(details);
+        } catch (error) {
+            console.error("Failed to fetch property details", error);
+        } finally {
             setIsSearchingProperty(false);
-        }, 1500);
+        }
     };
     
     const handleLenderToggle = (lender: string) => {
@@ -120,24 +187,165 @@ const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, onBac
                         )}
                     </Card>
 
+                    {isSearchingProperty && !propertyDetails && (
+                        <Card>
+                            <div className="flex justify-center items-center h-24">
+                                <Icon name="Loader" className="h-6 w-6 animate-spin text-primary-500" />
+                                <p className="ml-3 text-gray-500 dark:text-gray-400">Fetching property data from OneRoof...</p>
+                            </div>
+                        </Card>
+                    )}
+
+                    {propertyDetails && !isSearchingProperty && (
+                        <Card>
+                            <h3 className="text-lg font-semibold mb-4 flex items-center">
+                                <Icon name="Info" className="h-5 w-5 mr-2 text-primary-500" />
+                                Property Data
+                            </h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 text-sm">
+                                <PropertyDetailItem icon="Wifi" label="Broadband available" value={propertyDetails.broadband} />
+                                <PropertyDetailItem icon="Frame" label="Floor area" value={`${propertyDetails.floorArea}m²`} />
+                                <PropertyDetailItem icon="LandPlot" label="Land area" value={`${propertyDetails.landArea}m²`} />
+                                <PropertyDetailItem icon="Layers3" label="Unitary Plan" value={propertyDetails.unitaryPlan} />
+                                <PropertyDetailItem icon="FileBadge2" label="Type of title" value={propertyDetails.typeOfTitle} />
+                                <PropertyDetailItem icon="CalendarDays" label="Decade of construction" value={propertyDetails.decadeOfConstruction} />
+                                <PropertyDetailItem icon="Mountain" label="Contour" value={propertyDetails.contour} />
+                                <PropertyDetailItem icon="Construction" label="Construction" value={propertyDetails.construction} />
+                                <PropertyDetailItem icon="ShieldCheck" label="Condition" value={propertyDetails.condition} />
+                                <PropertyDetailItem icon="LayoutPanelTop" label="Deck" value={propertyDetails.deck} />
+                                <PropertyDetailItem icon="Landmark" label="Council" value={propertyDetails.council} />
+                                <PropertyDetailItem icon="BookKey" label="Title" value={propertyDetails.title} />
+                                <PropertyDetailItem icon="FileText" label="Legal description" value={<span className="break-all">{propertyDetails.legalDescription}</span>} />
+                                <PropertyDetailItem icon="FileText" label="Estate description" value={<span className="break-all">{propertyDetails.estateDescription}</span>} />
+                            </div>
+                        </Card>
+                    )}
+
                     <Card>
-                        <h3 className="text-lg font-semibold mb-4">Submit to Lenders</h3>
-                        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">Select one or more lenders to submit this application to.</p>
-                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-                            {LENDERS.map(lender => (
-                                <div 
-                                    key={lender} 
-                                    onClick={() => handleLenderToggle(lender)} 
-                                    className={`p-4 border rounded-lg text-center cursor-pointer transition-all ${selectedLenders.includes(lender) ? 'bg-primary-100 dark:bg-primary-900/40 border-primary-500 ring-2 ring-primary-500' : 'bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 border-gray-300 dark:border-gray-600'}`}
-                                >
-                                    <p className="font-semibold">{lender}</p>
-                                </div>
-                            ))}
-                         </div>
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-lg font-semibold flex items-center">
+                                <Icon name="Percent" className="h-5 w-5 mr-2 text-primary-500" />
+                                Current Interest Rates
+                            </h3>
+                            <Button variant="ghost" size="sm" onClick={() => alert('Refreshing rates...')} leftIcon="RefreshCw">
+                                Refresh
+                            </Button>
+                        </div>
+                        {isLoadingRates ? (
+                            <div className="flex justify-center items-center h-24">
+                                <Icon name="Loader" className="h-6 w-6 animate-spin text-primary-500" />
+                            </div>
+                        ) : (
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm text-left">
+                                    <thead className="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+                                        <tr>
+                                            <th scope="col" className="px-4 py-2">Lender</th>
+                                            {interestRates[0]?.rates.map(rate => (
+                                                <th key={rate.term} scope="col" className="px-4 py-2 text-center">{rate.term}</th>
+                                            ))}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {interestRates.map(bank => (
+                                            <tr key={bank.lender} className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 last:border-b-0">
+                                                <td className="px-4 py-2 font-semibold text-gray-900 dark:text-white">{bank.lender}</td>
+                                                {bank.rates.map(rate => (
+                                                    <td key={rate.term} className="px-4 py-2 text-center">{rate.rate.toFixed(2)}%</td>
+                                                ))}
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
                     </Card>
 
+                    <div className="relative rounded-lg overflow-hidden">
+                        <div className="absolute -inset-0.5 bg-gradient-to-r from-purple-600 via-pink-600 to-blue-600 rounded-lg blur opacity-75 animate-[spin_6s_linear_infinite]"></div>
+                        <Card className="relative">
+                            <div className="flex justify-between items-start mb-4">
+                                <div>
+                                    <h3 className="text-lg font-semibold flex items-center">
+                                        <Icon name="Sparkles" className="h-5 w-5 mr-2 text-primary-500" />
+                                        AI Lender Recommendation
+                                    </h3>
+                                </div>
+                                <Button variant="secondary" size="sm" onClick={handleRefreshRecommendation} isLoading={isRecommending} leftIcon="RefreshCw">
+                                    Refresh
+                                </Button>
+                            </div>
+
+                            {isRecommending && (
+                                <div className="flex flex-col items-center justify-center h-48">
+                                    <Icon name="Loader" className="h-8 w-8 animate-spin text-primary-500" />
+                                    <p className="mt-2 text-sm text-gray-500">Analyzing borrower's profile...</p>
+                                </div>
+                            )}
+
+                            {recommendationError && !isRecommending && (
+                                <div className="text-center text-red-500 p-4 bg-red-50 dark:bg-red-900/20 rounded-md">
+                                    <p>{recommendationError}</p>
+                                </div>
+                            )}
+                            
+                            {aiRecommendation && !isRecommending && (
+                                <div>
+                                    <div className="p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg mb-4">
+                                        <h4 className="font-semibold text-sm">AI Assessment Summary</h4>
+                                        <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">{aiRecommendation.assessmentSummary}</p>
+                                    </div>
+
+                                    <h4 className="font-semibold mb-3">Top Recommendations</h4>
+                                    <div className="space-y-4">
+                                        {aiRecommendation.recommendations.map(rec => (
+                                            <div 
+                                                key={rec.lender}
+                                                onClick={() => handleLenderToggle(rec.lender)}
+                                                className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${selectedLenders.includes(rec.lender) ? 'bg-primary-50 dark:bg-primary-900/40 border-primary-500 shadow-lg' : 'bg-transparent hover:bg-gray-50 dark:hover:bg-gray-700/30 border-gray-300 dark:border-gray-600'}`}
+                                            >
+                                                <div className="flex justify-between items-start">
+                                                    <p className="font-bold text-lg">{rec.lender}</p>
+                                                    <div className="flex items-center gap-4">
+                                                        {rec.interestRate && (
+                                                            <div className="text-right">
+                                                                <p className="text-xs text-gray-500">Interest Rate</p>
+                                                                <p className="font-semibold text-primary-600 dark:text-primary-400">{rec.interestRate}</p>
+                                                            </div>
+                                                        )}
+                                                        <div className="text-right">
+                                                            <p className="text-xs text-gray-500">Confidence</p>
+                                                            <div className="w-20 bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 mt-1">
+                                                                <div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${rec.confidenceScore * 100}%` }}></div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <p className="text-sm text-gray-600 dark:text-gray-400 mt-2">{rec.rationale}</p>
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-3 text-xs">
+                                                    <div>
+                                                        <p className="font-semibold text-green-600 flex items-center"><Icon name="TrendingUp" className="h-4 w-4 mr-1" /> Pros</p>
+                                                        <ul className="list-disc list-inside pl-1 mt-1 space-y-1">
+                                                            {rec.pros.map((pro, i) => <li key={i}>{pro}</li>)}
+                                                        </ul>
+                                                    </div>
+                                                    <div>
+                                                        <p className="font-semibold text-red-500 flex items-center"><Icon name="TrendingDown" className="h-4 w-4 mr-1" /> Cons</p>
+                                                        <ul className="list-disc list-inside pl-1 mt-1 space-y-1">
+                                                            {rec.cons.map((con, i) => <li key={i}>{con}</li>)}
+                                                        </ul>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </Card>
+                    </div>
+
                     <div className="flex justify-end pt-2">
-                        <Button size="lg" onClick={handleSubmit} disabled={selectedLenders.length === 0 || !propertyValue}>
+                         <Button size="lg" onClick={handleSubmit} disabled={selectedLenders.length === 0 || !propertyValue || !propertyDetails || isRecommending}>
                             Submit Application{selectedLenders.length > 0 && ` to ${selectedLenders.length} Lender(s)`}
                         </Button>
                     </div>
