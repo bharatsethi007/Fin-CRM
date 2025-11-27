@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from './common/Button';
 import { Icon } from './common/Icon';
-import { geminiService } from '../../services/geminiService';
+import { geminiService } from '../services/geminiService';
 
 interface Message {
   sender: 'user' | 'ai';

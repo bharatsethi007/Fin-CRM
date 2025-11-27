@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { crmService } from '../../services/crmService';
-import type { Client } from '../../types';
+import type { Client, Advisor } from '../../types';
 import { Button } from '../common/Button';
 import { Icon } from '../common/Icon';
 import ClientDetail from './ClientDetail';
@@ -13,17 +13,25 @@ interface ClientListProps {
 
 const ClientList: React.FC<ClientListProps> = ({ initialClientId, clearInitialClientId }) => {
   const [clients, setClients] = useState<Client[]>([]);
+  const [advisors, setAdvisors] = useState<Advisor[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [clientForNewApplication, setClientForNewApplication] = useState<Client | null>(null);
 
   useEffect(() => {
-    crmService.getClients()
-      .then(data => {
-        setClients(data);
-        setIsLoading(false);
-      });
+    setIsLoading(true);
+    Promise.all([
+      crmService.getClients(),
+      crmService.getAdvisors()
+    ]).then(([clientsData, advisorsData]) => {
+      setClients(clientsData);
+      setAdvisors(advisorsData);
+    }).catch(error => {
+      console.error("Failed to load client list data:", error);
+    }).finally(() => {
+      setIsLoading(false);
+    });
   }, []);
   
   useEffect(() => {
@@ -111,29 +119,44 @@ const ClientList: React.FC<ClientListProps> = ({ initialClientId, clearInitialCl
                 <th scope="col" className="px-6 py-3">Contact</th>
                 <th scope="col" className="px-6 py-3">Address</th>
                 <th scope="col" className="px-6 py-3">Date Added</th>
+                <th scope="col" className="px-6 py-3 text-center">Owner</th>
                 <th scope="col" className="px-6 py-3"><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
-              {filteredClients.map(client => (
-                <tr key={client.id} className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600">
-                  <td className="px-6 py-4 font-medium text-gray-900 dark:text-white whitespace-nowrap">
-                    <div className="flex items-center">
-                        <img src={client.avatarUrl} alt={client.name} className="h-8 w-8 rounded-full mr-3" />
-                        {client.name}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div>{client.email}</div>
-                    <div className="text-xs">{client.phone}</div>
-                  </td>
-                  <td className="px-6 py-4">{client.address}</td>
-                  <td className="px-6 py-4">{client.dateAdded}</td>
-                  <td className="px-6 py-4 text-right">
-                    <Button variant="ghost" size="sm" onClick={() => setSelectedClient(client)}>View</Button>
-                  </td>
-                </tr>
-              ))}
+              {filteredClients.map(client => {
+                const owner = advisors.find(a => a.id === client.advisorId);
+                return (
+                  <tr key={client.id} className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600">
+                    <td className="px-6 py-4 font-medium text-gray-900 dark:text-white whitespace-nowrap">
+                      <div className="flex items-center">
+                          <img src={client.avatarUrl} alt={client.name} className="h-8 w-8 rounded-full mr-3" />
+                          {client.name}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div>{client.email}</div>
+                      <div className="text-xs">{client.phone}</div>
+                    </td>
+                    <td className="px-6 py-4">{client.address}</td>
+                    <td className="px-6 py-4">{client.dateAdded}</td>
+                    <td className="px-6 py-4">
+                      <div className="flex justify-center">
+                        {owner ? (
+                            <img src={owner.avatarUrl} alt={owner.name} title={owner.name} className="h-8 w-8 rounded-full" />
+                        ) : (
+                            <div className="h-8 w-8 rounded-full bg-gray-200 dark:bg-gray-600 flex items-center justify-center" title="Unassigned">
+                                <Icon name="UserCog" className="h-5 w-5 text-gray-400" />
+                            </div>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <Button variant="ghost" size="sm" onClick={() => setSelectedClient(client)}>View</Button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

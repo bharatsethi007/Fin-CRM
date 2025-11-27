@@ -67,7 +67,7 @@ const App: React.FC = () => {
   const renderView = () => {
     switch (currentView) {
       case 'dashboard':
-        return <Dashboard setCurrentView={setCurrentView} navigateToClient={navigateToClient} />;
+        return <Dashboard setCurrentView={setCurrentView} navigateToClient={navigateToClient} advisor={currentAdvisor} />;
       case 'clients':
         return <ClientList initialClientId={initialClientId} clearInitialClientId={() => setInitialClientId(null)} />;
       case 'leads':
@@ -83,7 +83,7 @@ const App: React.FC = () => {
       case 'calls':
         return <CallsPage />;
       default:
-        return <Dashboard setCurrentView={setCurrentView} navigateToClient={navigateToClient} />;
+        return <Dashboard setCurrentView={setCurrentView} navigateToClient={navigateToClient} advisor={currentAdvisor} />;
     }
   };
   

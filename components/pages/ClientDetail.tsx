@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import type { Client, Application, Document, Task, Note, AuditTrailEntry, CallTranscript } from '../../types';
+import type { Client, Application, Document, Task, Note, AuditTrailEntry, CallTranscript, Advisor } from '../../types';
 import { ApplicationStatus, ClientPortalStatus } from '../../types';
 import { Button } from '../common/Button';
 import { Icon, IconName } from '../common/Icon';
@@ -101,9 +101,20 @@ const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, onNewApplic
   const [notes, setNotes] = useState<Note[]>([]);
   const [callTranscripts, setCallTranscripts] = useState<CallTranscript[]>([]);
   const [auditTrail, setAuditTrail] = useState<AuditTrailEntry[]>([]);
+  const [advisors, setAdvisors] = useState<Advisor[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
   const [isEditingFinancials, setIsEditingFinancials] = useState(false);
   const [editableFinancials, setEditableFinancials] = useState(currentClient.financials);
+
+  const [isEditingContact, setIsEditingContact] = useState(false);
+  const [editableContact, setEditableContact] = useState({
+      name: client.name,
+      email: client.email,
+      phone: client.phone,
+      address: client.address,
+  });
+
   const [newNoteContent, setNewNoteContent] = useState('');
   const [isSubmittingNote, setIsSubmittingNote] = useState(false);
   const [noteToConvert, setNoteToConvert] = useState<Note | null>(null);
@@ -117,13 +128,14 @@ const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, onNewApplic
   
   const fetchData = async () => {
       // Don't set isLoading to true here to avoid flicker on refresh
-      const [allApplications, allDocs, allTasks, allNotes, allAuditTrail, allCalls] = await Promise.all([
+      const [allApplications, allDocs, allTasks, allNotes, allAuditTrail, allCalls, allAdvisors] = await Promise.all([
         crmService.getApplications(),
         crmService.getDocuments(),
         crmService.getTasks(),
         crmService.getNotes(),
         crmService.getAuditTrail(client.id),
-        crmService.getCallTranscriptsForClient(client.id)
+        crmService.getCallTranscriptsForClient(client.id),
+        crmService.getAdvisors(),
       ]);
       setApplications(allApplications.filter(d => d.clientId === client.id));
       setDocuments(allDocs.filter(d => d.clientId === client.id));
@@ -131,6 +143,7 @@ const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, onNewApplic
       setNotes(allNotes.filter(n => n.clientId === client.id).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
       setAuditTrail(allAuditTrail.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
       setCallTranscripts(allCalls);
+      setAdvisors(allAdvisors);
       setIsLoading(false);
   };
 
@@ -188,6 +201,33 @@ const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, onNewApplic
         ...prev,
         [name]: Number(value)
     }));
+  };
+  
+   const handleContactChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setEditableContact(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleSaveContact = async () => {
+    try {
+        const updatedClient = await crmService.updateClientContactDetails(currentClient.id, editableContact);
+        setCurrentClient(updatedClient);
+        setIsEditingContact(false);
+        await fetchData(); // Refresh audit trail
+    } catch (error) {
+        console.error('Failed to update contact info:', error);
+        alert('There was an error updating contact details.');
+    }
+  };
+  
+  const handleCancelEditContact = () => {
+    setEditableContact({
+        name: currentClient.name,
+        email: currentClient.email,
+        phone: currentClient.phone,
+        address: currentClient.address,
+    });
+    setIsEditingContact(false);
   };
 
   const handleSaveFinancials = async () => {
@@ -327,6 +367,7 @@ const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, onNewApplic
       if (/task/i.test(action)) return 'CheckSquare';
       if (/financial/i.test(action)) return 'Pencil';
       if (/document/i.test(action)) return 'FilePlus2';
+      if (/contact details/i.test(action)) return 'Contact';
       return 'Sparkles';
   };
 
@@ -335,12 +376,16 @@ const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, onNewApplic
     // In a real app, this would fetch the recommendation data and generate a PDF.
     alert(`Simulating PDF download for recommendation ID: ${recommendationId}`);
   };
+  
+  const owner = useMemo(() => advisors.find(a => a.id === currentClient.advisorId), [advisors, currentClient]);
 
   const activeApplications = applications.filter(d => d.status !== ApplicationStatus.Settled && d.status !== ApplicationStatus.Declined);
   const previousApplications = applications.filter(d => d.status === ApplicationStatus.Settled || d.status === ApplicationStatus.Declined);
   const documentsById = documents.filter(d => d.category === 'ID');
   const documentsByFinancial = documents.filter(d => d.category === 'Financial');
   const kycDocuments = documents.filter(d => d.category === 'ID');
+  
+  const inputClasses = "block w-full text-sm rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 shadow-sm focus:border-primary-500 focus:ring-primary-500 p-2";
 
   const renderTabContent = () => {
     if (isLoading) {
@@ -616,24 +661,82 @@ const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, onNewApplic
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-1 space-y-6">
                 <Card>
-                    <div className="flex flex-col items-center text-center border-b pb-4 dark:border-gray-700">
+                    <div className="flex flex-col items-center text-center border-b pb-4 dark:border-gray-700 relative">
                         <img src={currentClient.avatarUrl} alt={currentClient.name} className="h-24 w-24 rounded-full mb-3" />
-                        <h2 className="text-xl font-bold">{currentClient.name}</h2>
+                         {isEditingContact ? (
+                            <input
+                                type="text"
+                                name="name"
+                                value={editableContact.name}
+                                onChange={handleContactChange}
+                                className="text-xl text-center font-bold bg-gray-100 dark:bg-gray-700 rounded-md p-1 w-full"
+                             />
+                        ) : (
+                             <h2 className="text-xl font-bold">{currentClient.name}</h2>
+                        )}
                         <p className="text-sm text-gray-500 dark:text-gray-400">Client since {currentClient.dateAdded}</p>
+                         {!isEditingContact && (
+                            <Button variant="ghost" size="sm" onClick={() => setIsEditingContact(true)} leftIcon="Pencil" className="!absolute top-0 right-0" />
+                        )}
                     </div>
                     <div className="space-y-3 text-sm pt-4">
-                        <div className="flex items-center">
-                            <Icon name="Mail" className="h-4 w-4 mr-3 text-gray-400 flex-shrink-0" />
-                            <span className="truncate">{currentClient.email}</span>
-                        </div>
-                        <div className="flex items-center">
-                            <Icon name="Phone" className="h-4 w-4 mr-3 text-gray-400 flex-shrink-0" />
-                            <span>{currentClient.phone}</span>
-                        </div>
-                        <div className="flex items-start">
-                            <Icon name="Home" className="h-4 w-4 mr-3 text-gray-400 flex-shrink-0 mt-0.5" />
-                            <span>{currentClient.address}</span>
-                        </div>
+                       {isEditingContact ? (
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400">Email</label>
+                                    <input type="email" name="email" value={editableContact.email} onChange={handleContactChange} className={`${inputClasses} mt-1`} />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400">Phone</label>
+                                    <input type="text" name="phone" value={editableContact.phone} onChange={handleContactChange} className={`${inputClasses} mt-1`} />
+                                </div>
+                                 <div>
+                                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400">Address</label>
+                                    <input type="text" name="address" value={editableContact.address} onChange={handleContactChange} className={`${inputClasses} mt-1`} />
+                                </div>
+                            </div>
+                        ) : (
+                            <>
+                                <div className="flex items-center">
+                                    <Icon name="Mail" className="h-4 w-4 mr-3 text-gray-400 flex-shrink-0" />
+                                    <span className="truncate">{currentClient.email}</span>
+                                </div>
+                                <div className="flex items-center">
+                                    <Icon name="Phone" className="h-4 w-4 mr-3 text-gray-400 flex-shrink-0" />
+                                    <span>{currentClient.phone}</span>
+                                </div>
+                                <div className="flex items-start">
+                                    <Icon name="Home" className="h-4 w-4 mr-3 text-gray-400 flex-shrink-0 mt-0.5" />
+                                    <span>{currentClient.address}</span>
+                                </div>
+                            </>
+                        )}
+                    </div>
+
+                    <div className="mt-4 pt-4 border-t dark:border-gray-700">
+                        {isEditingContact ? (
+                            <div className="flex justify-end space-x-2">
+                                <Button variant="secondary" onClick={handleCancelEditContact}>Cancel</Button>
+                                <Button onClick={handleSaveContact}>Save</Button>
+                            </div>
+                        ) : (
+                            <div>
+                                <h4 className="text-sm font-semibold mb-2 text-gray-600 dark:text-gray-300">Owner(s)</h4>
+                                <div className="flex justify-between items-center">
+                                    {owner ? (
+                                        <div className="flex items-center space-x-2">
+                                            <img src={owner.avatarUrl} alt={owner.name} className="h-8 w-8 rounded-full" />
+                                            <span className="font-medium text-sm">{owner.name}</span>
+                                        </div>
+                                    ) : (
+                                        <p className="text-sm text-gray-500">Unassigned</p>
+                                    )}
+                                    <Button variant="ghost" size="sm" leftIcon="UserPlus" onClick={() => alert('Add Owner functionality coming soon!')}>
+                                        Add
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </Card>
 

@@ -1,16 +1,18 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, LabelList } from 'recharts';
 import { Card } from '../common/Card';
 import { Icon, IconName } from '../common/Icon';
 import { Button } from '../common/Button';
 import { crmService } from '../../services/crmService';
-import type { Application, BankRates } from '../../types';
+import type { Application, BankRates, Advisor } from '../../types';
 import { ApplicationStatus } from '../../types';
 
 
 interface DashboardProps {
   setCurrentView: (view: string) => void;
   navigateToClient: (clientId: string) => void;
+  advisor: Advisor;
 }
 
 const chartData = [
@@ -119,12 +121,13 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 
-const Dashboard: React.FC<DashboardProps> = ({ setCurrentView, navigateToClient }) => {
+const Dashboard: React.FC<DashboardProps> = ({ setCurrentView, navigateToClient, advisor }) => {
   const [applications, setApplications] = useState<Application[]>([]);
   const [interestRates, setInterestRates] = useState<BankRates[]>([]);
   const [isLoadingApplications, setIsLoadingApplications] = useState(true);
   const [isLoadingRates, setIsLoadingRates] = useState(true);
   const [filter, setFilter] = useState<'All' | 'Needs Attention' | 'On Hold' | 'Active'>('All');
+  const [applicationView, setApplicationView] = useState<'my' | 'all'>('all');
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const filterRef = useRef<HTMLDivElement>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -172,9 +175,13 @@ const Dashboard: React.FC<DashboardProps> = ({ setCurrentView, navigateToClient 
 
 
   const filteredApplications = useMemo(() => {
-    if (filter === 'All') return applications;
-    return applications.filter(app => app.status_detail === filter);
-  }, [applications, filter]);
+    let apps = applications;
+    if (applicationView === 'my') {
+      apps = apps.filter(app => app.advisorId === advisor.id);
+    }
+    if (filter === 'All') return apps;
+    return apps.filter(app => app.status_detail === filter);
+  }, [applications, filter, applicationView, advisor.id]);
 
   const APPS_PER_PAGE = 10;
   const indexOfLastApp = currentPage * APPS_PER_PAGE;
@@ -217,6 +224,13 @@ const Dashboard: React.FC<DashboardProps> = ({ setCurrentView, navigateToClient 
     setIsFilterOpen(false);
     setCurrentPage(1);
   }
+  
+  const toggleButtonClasses = (isActive: boolean) => 
+    `inline-flex items-center px-3 py-1.5 text-xs font-medium focus:z-10 focus:outline-none focus:ring-1 focus:ring-primary-500 transition-colors ${
+        isActive
+        ? 'bg-primary-600 text-white'
+        : 'bg-white dark:bg-gray-700 text-gray-500 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600'
+    }`;
 
   return (
     <div className="space-y-6">
@@ -400,17 +414,27 @@ const Dashboard: React.FC<DashboardProps> = ({ setCurrentView, navigateToClient 
 
         <Card className="lg:col-span-3">
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold">All Mortgages</h3>
+            <div className="flex items-center space-x-4">
+                <h3 className="text-lg font-semibold">Mortgages</h3>
+                <div className="inline-flex rounded-md shadow-sm border border-gray-200 dark:border-gray-600">
+                    <button onClick={() => setApplicationView('my')} className={`${toggleButtonClasses(applicationView === 'my')} rounded-l-md`}>
+                        My Applications
+                    </button>
+                    <button onClick={() => setApplicationView('all')} className={`${toggleButtonClasses(applicationView === 'all')} -ml-px rounded-r-md`}>
+                        All Applications
+                    </button>
+                </div>
+            </div>
              <div className="relative" ref={filterRef}>
                 <Button variant="secondary" size="sm" leftIcon="Filter" onClick={() => setIsFilterOpen(!isFilterOpen)}>
-                    Filter
+                    Filter: {filter}
                 </Button>
                 {isFilterOpen && (
                     <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-md shadow-lg z-10 border dark:border-gray-700">
-                        <a href="#" onClick={() => handleFilterChange('All')} className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">All</a>
-                        <a href="#" onClick={() => handleFilterChange('Active')} className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">Active</a>
-                        <a href="#" onClick={() => handleFilterChange('Needs Attention')} className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">Needs Attention</a>
-                        <a href="#" onClick={() => handleFilterChange('On Hold')} className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">On Hold</a>
+                        <a href="#" onClick={(e) => {e.preventDefault(); handleFilterChange('All')}} className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">All</a>
+                        <a href="#" onClick={(e) => {e.preventDefault(); handleFilterChange('Active')}} className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">Active</a>
+                        <a href="#" onClick={(e) => {e.preventDefault(); handleFilterChange('Needs Attention')}} className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">Needs Attention</a>
+                        <a href="#" onClick={(e) => {e.preventDefault(); handleFilterChange('On Hold')}} className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">On Hold</a>
                     </div>
                 )}
              </div>

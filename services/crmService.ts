@@ -1,4 +1,5 @@
 
+
 import type { Client, Lead, Application, Task, Advisor, Document, Note, AuditTrailEntry, AIRecommendationResponse, OneRoofPropertyDetails, BankRates, Firm, CallTranscript, TaskComment } from '../types';
 import { LeadStatus, ApplicationStatus, ClientPortalStatus } from '../types';
 
@@ -47,10 +48,10 @@ const MOCK_LEADS: Lead[] = [
 
 
 let MOCK_APPLICATIONS: Application[] = [
-    { id: 'd1', firmId: 'firm_1', referenceNumber: 'AF-2407-001', clientName: 'Aroha Taylor', clientId: 'c1', lender: 'ANZ', loanAmount: 650000, status: ApplicationStatus.ApplicationSubmitted, estSettlementDate: '2024-08-30', status_detail: 'Active', lastUpdated: '2024-07-29T14:00:00Z', updatedByName: 'Liam Wilson' },
-    { id: 'd2', firmId: 'firm_1', referenceNumber: 'AF-2407-002', clientName: 'Ben Cooper', clientId: 'c2', lender: 'ASB', loanAmount: 480000, status: ApplicationStatus.ConditionalApproval, estSettlementDate: '2024-09-15', status_detail: 'Needs Attention', lastUpdated: '2024-07-28T10:15:00Z', updatedByName: 'Sarah Chen' },
-    { id: 'd3', firmId: 'firm_2', referenceNumber: 'AF-2407-003', clientName: 'Ivy Clark', clientId: 'c3', lender: 'BNZ', loanAmount: 720000, status: ApplicationStatus.UnconditionalApproval, estSettlementDate: '2024-08-20', status_detail: 'Active', lastUpdated: '2024-07-29T09:30:00Z', updatedByName: 'Olivia Garcia' },
-    { id: 'd4', firmId: 'firm_2', referenceNumber: 'AF-2407-004', clientName: 'Jack Roberts', clientId: 'c4', lender: 'Westpac', loanAmount: 950000, status: ApplicationStatus.Settled, estSettlementDate: '2024-07-25', status_detail: 'Active', lastUpdated: '2024-07-25T11:00:00Z', updatedByName: 'Noah Martinez' },
+    { id: 'd1', firmId: 'firm_1', referenceNumber: 'AF-2407-001', clientName: 'Aroha Taylor', clientId: 'c1', advisorId: 'adv_1', lender: 'ANZ', loanAmount: 650000, status: ApplicationStatus.ApplicationSubmitted, estSettlementDate: '2024-08-30', status_detail: 'Active', lastUpdated: '2024-07-29T14:00:00Z', updatedByName: 'Liam Wilson', lenderReferenceNumber: 'ANZ-12345', brokerId: 'BWF-007', financeDueDate: '2024-08-15', loanSecurityAddress: '12 Kiwi Street, Auckland' },
+    { id: 'd2', firmId: 'firm_1', referenceNumber: 'AF-2407-002', clientName: 'Ben Cooper', clientId: 'c2', advisorId: 'adv_2', lender: 'ASB', loanAmount: 480000, status: ApplicationStatus.ConditionalApproval, estSettlementDate: '2024-09-15', status_detail: 'Needs Attention', lastUpdated: '2024-07-28T10:15:00Z', updatedByName: 'Sarah Chen', lenderReferenceNumber: 'ASB-67890', brokerId: 'SCF-002', financeDueDate: '2024-08-20', loanSecurityAddress: '45 Fern Road, Wellington' },
+    { id: 'd3', firmId: 'firm_2', referenceNumber: 'AF-2407-003', clientName: 'Ivy Clark', clientId: 'c3', advisorId: 'adv_3', lender: 'BNZ', loanAmount: 720000, status: ApplicationStatus.UnconditionalApproval, estSettlementDate: '2024-08-20', status_detail: 'Active', lastUpdated: '2024-07-29T09:30:00Z', updatedByName: 'Olivia Garcia', lenderReferenceNumber: 'BNZ-54321', brokerId: 'OGF-001', financeDueDate: '2024-08-10', loanSecurityAddress: '101 Main Street, Christchurch' },
+    { id: 'd4', firmId: 'firm_2', referenceNumber: 'AF-2407-004', clientName: 'Jack Roberts', clientId: 'c4', advisorId: 'adv_4', lender: 'Westpac', loanAmount: 950000, status: ApplicationStatus.Settled, estSettlementDate: '2024-07-25', status_detail: 'Active', lastUpdated: '2024-07-25T11:00:00Z', updatedByName: 'Noah Martinez', lenderReferenceNumber: 'WPC-98765', brokerId: 'NMF-003', financeDueDate: '2024-07-20', loanSecurityAddress: '202 High Street, Dunedin' },
 ];
 
 
@@ -324,6 +325,31 @@ export const crmService = {
     return mockApiCall(newTask);
   },
   
+  updateClientContactDetails: (clientId: string, details: Partial<Pick<Client, 'name' | 'email' | 'phone' | 'address'>>): Promise<Client> => {
+    if (!currentUser) return Promise.reject("Not logged in");
+    const clientIndex = MOCK_CLIENTS.findIndex(c => c.id === clientId);
+    if (clientIndex > -1) {
+        const originalClient = { ...MOCK_CLIENTS[clientIndex] };
+        MOCK_CLIENTS[clientIndex] = { ...MOCK_CLIENTS[clientIndex], ...details };
+        
+        const changes = Object.keys(details)
+            .filter(key => details[key as keyof typeof details] !== originalClient[key as keyof typeof details])
+            .map(key => `${key} changed`)
+            .join(', ');
+
+        if (changes) {
+            crmService.addAuditTrailEntry({
+                clientId: clientId,
+                userName: currentUser.name,
+                userAvatarUrl: currentUser.avatarUrl,
+                action: `updated contact details: ${changes}.`
+            });
+        }
+        return mockApiCall(MOCK_CLIENTS[clientIndex]);
+    }
+    return Promise.reject('Client not found');
+  },
+  
   updateClientFinancials: (clientId: string, financials: Client['financials']): Promise<Client> => {
     if (!currentUser) return Promise.reject("Not logged in");
     const clientIndex = MOCK_CLIENTS.findIndex(c => c.id === clientId);
@@ -372,6 +398,7 @@ export const crmService = {
     const year = now.getFullYear().toString().slice(-2);
     const month = (now.getMonth() + 1).toString().padStart(2, '0');
     const newId = MOCK_APPLICATIONS.length + 1;
+    const client = MOCK_CLIENTS.find(c => c.id === clientId);
 
     const newApplication: Application = {
       id: `d${newId}`,
@@ -379,6 +406,7 @@ export const crmService = {
       referenceNumber: `AF-${year}${month}-${newId.toString().padStart(3, '0')}`,
       clientId,
       clientName,
+      advisorId: client?.advisorId || currentUser.id,
       lender: 'N/A',
       loanAmount: 0,
       status: ApplicationStatus.Draft,
@@ -386,6 +414,10 @@ export const crmService = {
       status_detail: 'Needs Attention',
       lastUpdated: now.toISOString(),
       updatedByName: currentUser.name,
+      lenderReferenceNumber: '',
+      brokerId: '',
+      financeDueDate: '',
+      loanSecurityAddress: '',
     };
 
     MOCK_APPLICATIONS.unshift(newApplication);

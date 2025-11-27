@@ -1,3 +1,5 @@
+
+
 export enum LeadStatus {
   New = "New Lead",
   Contacted = "Contacted",
@@ -76,6 +78,7 @@ export interface Application {
   referenceNumber: string;
   clientName: string;
   clientId: string;
+  advisorId: string;
   lender: string;
   loanAmount: number;
   status: ApplicationStatus;
@@ -84,6 +87,10 @@ export interface Application {
   lastUpdated: string;
   updatedByName: string;
   riskLevel?: 'Low' | 'Medium' | 'High';
+  lenderReferenceNumber?: string;
+  brokerId?: string;
+  financeDueDate?: string;
+  loanSecurityAddress?: string;
 }
 
 export interface Task {
