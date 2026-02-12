@@ -1,0 +1,13 @@
+# Netlify build configuration for Fin-CRM
+# The main app is in "Frontend repo" - build from there
+
+[build]
+  base = "Frontend repo"
+  command = "npm run build"
+  publish = "Frontend repo/dist"
+
+# SPA: redirect all routes to index.html for client-side routing
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
