@@ -6,6 +6,7 @@ import { Icon } from '../common/Icon';
 import { Card } from '../common/Card';
 import { CalendarCard } from '../common/CalendarCard';
 import { TaskDetailModal } from '../common/TaskDetailModal';
+import { AddTaskModal } from '../common/AddTaskModal';
 
 const priorityClasses = {
   High: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
@@ -57,13 +58,14 @@ const TaskList: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState<Date | null>(new Date());
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
 
   const fetchData = () => {
     setIsLoading(true);
     crmService.getTasks().then(data => {
       setTasks(data.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()));
       setIsLoading(false);
-    });
+    }).catch(() => setIsLoading(false));
   };
 
   useEffect(() => {
@@ -78,9 +80,10 @@ const TaskList: React.FC = () => {
 
   const handleToggleTask = (id: string) => {
     const task = tasks.find(t => t.id === id);
-    if(task) {
+    if (task) {
       crmService.updateTask(id, { isCompleted: !task.isCompleted })
-        .then(() => fetchData());
+        .then(() => fetchData())
+        .catch(() => fetchData());
     }
   };
   
@@ -112,7 +115,7 @@ const TaskList: React.FC = () => {
           <h2 className="text-2xl font-bold">My Tasks</h2>
           <p className="text-gray-500 dark:text-gray-400">Stay on top of your priorities.</p>
         </div>
-        <Button leftIcon="PlusCircle">Add Task</Button>
+        <Button leftIcon="PlusCircle" onClick={() => setShowAddModal(true)}>Add Task</Button>
       </div>
 
         {isLoading ? (
@@ -213,6 +216,14 @@ const TaskList: React.FC = () => {
                 setSelectedTask(null);
                 fetchData();
             }}
+        />
+      )}
+
+      {showAddModal && (
+        <AddTaskModal
+          isOpen={showAddModal}
+          onClose={() => setShowAddModal(false)}
+          onSuccess={fetchData}
         />
       )}
     </div>

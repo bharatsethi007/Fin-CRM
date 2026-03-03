@@ -3,7 +3,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📋</text></svg>" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AdvisorFlow CRM</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -37,21 +37,17 @@
         }
       }
     </script>
-  <script type="importmap">
-{
-  "imports": {
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.27.0",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.548.0",
-    "recharts": "https://aistudiocdn.com/recharts@^3.3.0"
-  }
-}
-</script>
 </head>
   <body class="bg-gray-100 dark:bg-gray-900 font-sans">
     <div id="root"></div>
+    <script>
+      window.addEventListener('error', function(e) {
+        var el = document.getElementById('root');
+        if (el && !el.hasChildNodes()) {
+          el.innerHTML = '<div style="padding:24px;font-family:sans-serif;max-width:600px"><h2 style="color:#dc2626">AdvisorFlow failed to load</h2><pre style="background:#fef2f2;padding:12px;overflow:auto;font-size:12px">' + (e.message || 'Unknown error') + '</pre></div>';
+        }
+      });
+    </script>
     <script type="module" src="/index.tsx"></script>
   </body>
 </html>

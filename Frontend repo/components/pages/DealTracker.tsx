@@ -27,10 +27,19 @@ const RiskBadge: React.FC<{ risk: Application['riskLevel'] }> = ({ risk }) => {
     );
 };
 
-const ApplicationCard: React.FC<{ application: Application; onClick: () => void; }> = ({ application, onClick }) => (
-  <div 
+const ApplicationCard: React.FC<{
+  application: Application;
+  onClick: () => void;
+  onDragStart: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
+  isDragging?: boolean;
+}> = ({ application, onClick, onDragStart, onDragEnd, isDragging }) => (
+  <div
+    draggable
+    onDragStart={onDragStart}
+    onDragEnd={onDragEnd}
     onClick={onClick}
-    className="p-3 mb-3 bg-gray-100 dark:bg-gray-700 rounded-md shadow-sm cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+    className={`p-3 mb-3 bg-gray-100 dark:bg-gray-700 rounded-md shadow-sm cursor-grab active:cursor-grabbing hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors ${isDragging ? 'opacity-50' : ''}`}
   >
     <div className="flex justify-between items-start">
         <div>
@@ -67,6 +76,10 @@ const ApplicationTracker: React.FC = () => {
   const [view, setView] = useState<'board' | 'list'>('board');
   const [selectedApplication, setSelectedApplication] = useState<Application | null>(null);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
+  const [pendingDraftEdit, setPendingDraftEdit] = useState<{ application: Application; client: Client } | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverStatus, setDragOverStatus] = useState<ApplicationStatus | null>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
 
   const fetchData = () => {
     setIsLoading(true);
@@ -110,7 +123,51 @@ const ApplicationTracker: React.FC = () => {
     setSelectedApplication(null);
     setSelectedClient(null);
   };
-  
+
+  const handleDragStart = (e: React.DragEvent, application: Application) => {
+    setDraggingId(application.id);
+    e.dataTransfer.setData('applicationId', application.id);
+    e.dataTransfer.setData('applicationStatus', application.status);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragEnd = () => {
+    setDraggingId(null);
+  };
+
+  const handleDragOver = (e: React.DragEvent, status?: ApplicationStatus) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (status !== undefined) setDragOverStatus(status);
+  };
+
+  const handleDragLeave = () => {
+    setDragOverStatus(null);
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetStatus: ApplicationStatus) => {
+    e.preventDefault();
+    setDragOverStatus(null);
+    const applicationId = e.dataTransfer.getData('applicationId');
+    const sourceStatus = e.dataTransfer.getData('applicationStatus') as ApplicationStatus;
+    if (!applicationId || sourceStatus === targetStatus) return;
+    setDraggingId(null);
+    setIsUpdating(true);
+    try {
+      await crmService.updateApplicationWorkflowStage(applicationId, targetStatus);
+      setApplications(prev =>
+        prev.map(app =>
+          app.id === applicationId ? { ...app, status: targetStatus } : app
+        )
+      );
+    } catch (err) {
+      console.error('Failed to update application stage:', err);
+      fetchData();
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   const viewButtonClasses = (isActive: boolean) => 
     `inline-flex items-center px-3 py-1.5 text-sm font-medium focus:z-10 focus:outline-none focus:ring-2 focus:ring-primary-500 transition-colors ${
         isActive
@@ -119,25 +176,31 @@ const ApplicationTracker: React.FC = () => {
     }`;
     
   if (selectedApplication && selectedClient) {
-    if (selectedApplication.status === ApplicationStatus.Draft) {
-      return (
-        <LoanApplicationForm
-          client={selectedClient}
-          draftApplication={{ id: selectedApplication.id, referenceNumber: selectedApplication.referenceNumber }}
-          isEditMode={true}
-          onBack={handleBackToList}
-          onSuccess={handleUpdate}
-          onApplicationsUpdated={handleUpdate}
-        />
-      );
-    }
     return (
-        <ApplicationDetailPage
-            application={selectedApplication}
-            client={selectedClient}
-            onBack={handleBackToList}
-            onUpdate={handleUpdate}
-        />
+      <ApplicationDetailPage
+        application={selectedApplication}
+        client={selectedClient}
+        onBack={handleBackToList}
+        onUpdate={handleUpdate}
+        onEditDraft={selectedApplication.status === ApplicationStatus.Draft ? () => {
+          setPendingDraftEdit({ application: selectedApplication, client: selectedClient });
+          setSelectedApplication(null);
+          setSelectedClient(null);
+        } : undefined}
+      />
+    );
+  }
+
+  if (pendingDraftEdit) {
+    return (
+      <LoanApplicationForm
+        client={pendingDraftEdit.client}
+        draftApplication={{ id: pendingDraftEdit.application.id, referenceNumber: pendingDraftEdit.application.referenceNumber }}
+        isEditMode={true}
+        onBack={() => setPendingDraftEdit(null)}
+        onSuccess={handleUpdate}
+        onApplicationsUpdated={() => { setPendingDraftEdit(null); handleUpdate(); }}
+      />
     );
   }
 
@@ -172,13 +235,28 @@ const ApplicationTracker: React.FC = () => {
         {view === 'board' && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
             {APPLICATION_STATUS_COLUMNS.map(status => (
-                <div key={status} className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4">
+                <div
+                  key={status}
+                  className={`bg-gray-50 dark:bg-gray-800 rounded-lg p-4 min-h-[200px] transition-all ${
+                    isUpdating ? 'opacity-50' : ''
+                  } ${dragOverStatus === status ? 'ring-2 ring-primary-500 ring-inset' : ''}`}
+                  onDragOver={(e) => handleDragOver(e, status)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => handleDrop(e, status)}
+                >
                 <h3 className="font-semibold mb-4 text-center text-gray-600 dark:text-gray-300">
-                    {status.toUpperCase()} ({getApplicationsByStatus(status).length})
+                    {status} ({getApplicationsByStatus(status).length})
                 </h3>
                 <div className="h-[calc(100vh-20rem)] overflow-y-auto pr-2">
                     {getApplicationsByStatus(status).map(app => (
-                        <ApplicationCard key={app.id} application={app} onClick={() => handleApplicationClick(app)} />
+                        <ApplicationCard
+                          key={app.id}
+                          application={app}
+                          onClick={() => handleApplicationClick(app)}
+                          onDragStart={(e) => handleDragStart(e, app)}
+                          onDragEnd={handleDragEnd}
+                          isDragging={draggingId === app.id}
+                        />
                     ))}
                 </div>
                 </div>

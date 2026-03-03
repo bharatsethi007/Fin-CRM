@@ -1,35 +1,41 @@
 
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type { Application, Client, Note, Document } from '../../types';
+import { ApplicationStatus } from '../../types';
 import { crmService } from '../../services/crmService';
 import { geminiService } from '../../services/geminiService';
 import { Button } from '../common/Button';
 import { Icon, IconName } from '../common/Icon';
 import { Card } from '../common/Card';
 import { MilestoneTracker } from '../common/MilestoneTracker';
+import { NZ_BANKS } from '../../constants';
+import { ApplicantsTab } from '../application/ApplicantsTab';
+import { EmploymentIncomeTab } from '../application/EmploymentIncomeTab';
+import { ExpensesTab } from '../application/ExpensesTab';
+import { AssetsTab } from '../application/AssetsTab';
+import { LiabilitiesTab } from '../application/LiabilitiesTab';
+import { CompaniesTab } from '../application/CompaniesTab';
 
 interface ApplicationDetailPageProps {
   application: Application;
   client: Client;
   onBack: () => void;
   onUpdate: () => void;
+  onEditDraft?: () => void;
 }
 
 const TABS: { name: string; icon: IconName }[] = [
-    { name: 'Details', icon: 'FileText' },
-    { name: 'Personal', icon: 'Contact' },
-    { name: 'Financials', icon: 'Banknote' },
+    { name: 'Overview', icon: 'FileText' },
+    { name: 'Applicants', icon: 'Users' },
+    { name: 'Employment & Income', icon: 'Briefcase' },
+    { name: 'Expenses', icon: 'TrendingDown' },
+    { name: 'Assets', icon: 'Gem' },
+    { name: 'Liabilities', icon: 'Landmark' },
+    { name: 'Companies', icon: 'Building2' },
     { name: 'Documents', icon: 'FilePlus2' },
-    { name: 'Comms', icon: 'Mail' }
+    { name: 'Notes', icon: 'Mail' }
 ];
-
-interface Applicant {
-    name: string;
-    email: string;
-    phone: string;
-    address: string;
-}
 
 const DetailItem: React.FC<{ label: string; value: string | number; icon?: any }> = ({ label, value, icon }) => (
     <div className="flex items-center">
@@ -41,8 +47,8 @@ const DetailItem: React.FC<{ label: string; value: string | number; icon?: any }
     </div>
 );
 
-export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({ application, client, onBack, onUpdate }) => {
-    const [activeTab, setActiveTab] = useState(TABS[0].name);
+export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({ application, client, onBack, onUpdate, onEditDraft }) => {
+    const [activeTab, setActiveTab] = useState('Overview');
     const [editableApplication, setEditableApplication] = useState(application);
 
     const [notes, setNotes] = useState<Note[]>([]);
@@ -55,15 +61,8 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({ ap
     const [transcript, setTranscript] = useState('');
     const [auditResult, setAuditResult] = useState<{ summary: string; actions: string[] } | null>(null);
     const [isAuditing, setIsAuditing] = useState(false);
-    
-    const [applicants, setApplicants] = useState<Applicant[]>([
-        {
-            name: client.name,
-            email: client.email,
-            phone: client.phone,
-            address: client.address,
-        }
-    ]);
+    const [isUploadingDoc, setIsUploadingDoc] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     const fetchData = async () => {
         setIsLoadingData(true);
@@ -97,25 +96,27 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({ ap
         }));
     };
     
-    const handleApplicantChange = (index: number, field: keyof Applicant, value: string) => {
-        const updatedApplicants = [...applicants];
-        updatedApplicants[index][field] = value;
-        setApplicants(updatedApplicants);
+    const handleUploadDocumentClick = () => {
+        fileInputRef.current?.click();
     };
 
-    const addApplicant = () => {
-        setApplicants([...applicants, { name: '', email: '', phone: '', address: '' }]);
-    };
-
-    const removeApplicant = (index: number) => {
-        if (index === 0) return; // Cannot remove primary applicant
-        const updatedApplicants = applicants.filter((_, i) => i !== index);
-        setApplicants(updatedApplicants);
-    };
-
-    const handleSaveApplicants = () => {
-        console.log("Saving applicants:", applicants);
-        alert("Applicant details saved! (Check console for data)");
+    const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = e.target.files ? Array.from(e.target.files) : [];
+        e.target.value = '';
+        if (files.length === 0) return;
+        setIsUploadingDoc(true);
+        try {
+            for (const file of files) {
+                await crmService.addDocument(client.id, file, 'Other');
+            }
+            await fetchData();
+            onUpdate();
+        } catch (err) {
+            console.error('Document upload failed:', err);
+            alert('Failed to upload document(s). Please try again.');
+        } finally {
+            setIsUploadingDoc(false);
+        }
     };
 
     const handleSaveDetails = async () => {
@@ -213,13 +214,23 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({ ap
             return <div className="flex justify-center items-center h-64"><Icon name="Loader" className="h-8 w-8 animate-spin" /></div>;
         }
         switch (activeTab) {
-            case 'Details':
+            case 'Overview':
                 return (
                     <Card>
+                        {application.status === ApplicationStatus.Draft && onEditDraft && (
+                            <div className="mb-6 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex items-center justify-between">
+                                <p className="text-sm text-amber-800 dark:text-amber-200">This application is in draft. Complete the application form to submit.</p>
+                                <Button size="sm" variant="secondary" onClick={onEditDraft} leftIcon="Pencil">Continue editing</Button>
+                            </div>
+                        )}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                                 <label htmlFor="lender" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Lender</label>
-                                <input type="text" name="lender" id="lender" value={editableApplication.lender} onChange={handleDetailsChange} className={`${inputClasses} mt-1`} />
+                                <select name="lender" id="lender" value={editableApplication.lender || ''} onChange={handleDetailsChange} className={`${inputClasses} mt-1`}>
+                                    <option value="">— Select —</option>
+                                    {editableApplication.lender && !NZ_BANKS.includes(editableApplication.lender) && <option value={editableApplication.lender}>{editableApplication.lender}</option>}
+                                    {NZ_BANKS.map(b => <option key={b} value={b}>{b}</option>)}
+                                </select>
                             </div>
                             <div>
                                 <label htmlFor="lenderReferenceNumber" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Lender's Reference Number</label>
@@ -254,75 +265,34 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({ ap
                         </div>
                     </Card>
                 );
-            case 'Personal':
-                 return (
-                    <Card>
-                        <h4 className="font-semibold mb-4">Applicant Information</h4>
-                        <div className="space-y-6">
-                            {applicants.map((applicant, index) => (
-                                <div key={index} className="p-4 border rounded-lg dark:border-gray-700 relative bg-gray-50 dark:bg-gray-900/30">
-                                    <p className="text-xs font-semibold uppercase text-gray-500 mb-4">{index === 0 ? 'Primary Applicant' : `Applicant ${index + 1}`}</p>
-                                    {index > 0 && (
-                                        <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            onClick={() => removeApplicant(index)}
-                                            className="!absolute top-2 right-2"
-                                            aria-label="Remove applicant"
-                                        >
-                                            <Icon name="X" className="h-4 w-4" />
-                                        </Button>
-                                    )}
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400">Full Name</label>
-                                            <input type="text" value={applicant.name} onChange={(e) => handleApplicantChange(index, 'name', e.target.value)} className={`${inputClasses} mt-1`} />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400">Email Address</label>
-                                            <input type="email" value={applicant.email} onChange={(e) => handleApplicantChange(index, 'email', e.target.value)} className={`${inputClasses} mt-1`} />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400">Phone Number</label>
-                                            <input type="tel" value={applicant.phone} onChange={(e) => handleApplicantChange(index, 'phone', e.target.value)} className={`${inputClasses} mt-1`} />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400">Address</label>
-                                            <input type="text" value={applicant.address} onChange={(e) => handleApplicantChange(index, 'address', e.target.value)} className={`${inputClasses} mt-1`} />
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                        <div className="mt-6 flex justify-between items-center">
-                            <Button variant="secondary" leftIcon="Plus" onClick={addApplicant}>
-                                Add Applicant
-                            </Button>
-                            <Button onClick={handleSaveApplicants}>
-                                Save Changes
-                            </Button>
-                        </div>
-                    </Card>
-                );
-            case 'Financials':
-                return (
-                     <Card>
-                        <h4 className="font-semibold mb-4">Financial Summary</h4>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <DetailItem label="Annual Income" value={`$${client.financials.income.toLocaleString()}`} icon="TrendingUp" />
-                            <DetailItem label="Annual Expenses" value={`$${client.financials.expenses.toLocaleString()}`} icon="TrendingDown" />
-                            <DetailItem label="Total Assets" value={`$${client.financials.assets.toLocaleString()}`} icon="Gem" />
-                            <DetailItem label="Total Liabilities" value={`$${client.financials.liabilities.toLocaleString()}`} icon="Landmark" />
-                        </div>
-                        <p className="text-xs text-gray-400 mt-4 text-center">To edit these details, please go to the main client profile page.</p>
-                    </Card>
-                );
+            case 'Applicants':
+                return <Card><ApplicantsTab applicationId={application.id} /></Card>;
+            case 'Employment & Income':
+                return <Card><EmploymentIncomeTab applicationId={application.id} /></Card>;
+            case 'Expenses':
+                return <Card><ExpensesTab applicationId={application.id} /></Card>;
+            case 'Assets':
+                return <Card><AssetsTab applicationId={application.id} /></Card>;
+            case 'Liabilities':
+                return <Card><LiabilitiesTab applicationId={application.id} /></Card>;
+            case 'Companies':
+                return <Card><CompaniesTab applicationId={application.id} /></Card>;
             case 'Documents':
                 return (
                     <Card>
+                        <input
+                            type="file"
+                            ref={fileInputRef}
+                            className="hidden"
+                            multiple
+                            accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif"
+                            onChange={handleFileInputChange}
+                        />
                         <div className="flex justify-between items-center mb-4">
                              <h4 className="font-semibold">Attached Documents</h4>
-                             <Button size="sm" leftIcon="FilePlus2">Upload Document</Button>
+                             <Button size="sm" leftIcon="FilePlus2" onClick={handleUploadDocumentClick} disabled={isUploadingDoc} isLoading={isUploadingDoc}>
+                                 Upload Document
+                             </Button>
                         </div>
                        
                         {documents.length > 0 ? (
@@ -336,14 +306,16 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({ ap
                                                 <p className="text-xs text-gray-500">Uploaded: {doc.uploadDate}</p>
                                             </div>
                                         </div>
-                                        <Button variant="ghost" size="sm" leftIcon="Download">Download</Button>
+                                        <a href={doc.url} target="_blank" rel="noopener noreferrer">
+                                            <Button variant="ghost" size="sm" leftIcon="Download">Download</Button>
+                                        </a>
                                     </li>
                                 ))}
                             </ul>
                         ) : <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">No documents found for this client.</p>}
                     </Card>
                 );
-            case 'Comms':
+            case 'Notes':
                 return (
                     <div className="space-y-6">
                         <Card>

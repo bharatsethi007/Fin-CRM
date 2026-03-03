@@ -59,3 +59,19 @@ export const APPLICATION_STATUS_COLUMNS: ApplicationStatus[] = [
     ApplicationStatus.UnconditionalApproval,
     ApplicationStatus.Settled,
 ];
+
+// NZ-specific dropdown options
+export const NZ_REGIONS = ['Northland', 'Auckland', 'Waikato', 'Bay of Plenty', 'Gisborne', "Hawke's Bay", 'Taranaki', 'Manawatū-Whanganui', 'Wellington', 'Tasman', 'Nelson', 'Marlborough', 'West Coast', 'Canterbury', 'Otago', 'Southland'] as const;
+export const NZ_BANKS = ['ANZ', 'ASB', 'BNZ', 'Westpac', 'Kiwibank', 'TSB', 'SBS Bank', 'The Co-operative Bank', 'Heartland Bank', 'HSBC', 'Rabobank'] as const;
+export const NZ_KIWISAVER_PROVIDERS = ['ANZ', 'ASB', 'BNZ', 'Westpac', 'Fisher Funds', 'Milford', 'Simplicity', 'Kernel', 'InvestNow', 'Generate', 'Booster', 'AMP'] as const;
+export const NZ_RESIDENCY_STATUS = ['NZ Citizen', 'NZ Permanent Resident', 'Australian Citizen', 'Work Visa', 'Student Visa', 'Other'] as const;
+
+// Map ApplicationStatus to Supabase workflow_stage
+export const APPLICATION_STATUS_TO_WORKFLOW: Record<ApplicationStatus, string> = {
+    [ApplicationStatus.Draft]: 'draft',
+    [ApplicationStatus.ApplicationSubmitted]: 'submitted',
+    [ApplicationStatus.ConditionalApproval]: 'conditional',
+    [ApplicationStatus.UnconditionalApproval]: 'unconditional',
+    [ApplicationStatus.Settled]: 'settled',
+    [ApplicationStatus.Declined]: 'declined',
+};

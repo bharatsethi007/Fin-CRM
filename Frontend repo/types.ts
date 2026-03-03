@@ -100,13 +100,20 @@ export interface Application {
   loanSecurityAddress?: string;
 }
 
+export type TaskType = 'to_do' | 'follow_up' | 'compliance' | 'document_request' | 'call' | 'meeting';
+export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
+
 export interface Task {
-  id:string;
+  id: string;
   firmId: string;
   title: string;
+  description?: string;
   dueDate: string;
+  dueTime?: string;
   isCompleted: boolean;
   priority: 'High' | 'Medium' | 'Low';
+  taskType?: TaskType;
+  status?: TaskStatus;
   clientId?: string;
   applicationId?: string;
   assigneeId?: string;
@@ -114,6 +121,9 @@ export interface Task {
   assigneeAvatarUrl?: string;
   recurring?: 'none' | 'daily' | 'weekly' | 'monthly';
   category?: string;
+  completedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface Advisor {

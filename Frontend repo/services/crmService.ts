@@ -3,6 +3,7 @@
 import type { Client, Lead, Application, Task, Advisor, Document, DocumentFolder, Note, AuditTrailEntry, AIRecommendationResponse, OneRoofPropertyDetails, BankRates, Firm, CallTranscript, TaskComment, KYCDocument, Notification } from '../types';
 import type { KYCSection } from '../types';
 import { LeadStatus, ApplicationStatus, ClientPortalStatus } from '../types';
+import { APPLICATION_STATUS_TO_WORKFLOW } from '../constants';
 import { supabase } from './supabaseClient';
 
 const MOCK_FIRMS: Firm[] = [
@@ -295,7 +296,9 @@ export const crmService = {
             const workflowToStatus: Record<string, ApplicationStatus> = {
                 draft: ApplicationStatus.Draft,
                 submitted: ApplicationStatus.ApplicationSubmitted,
+                conditional: ApplicationStatus.ConditionalApproval,
                 conditional_approval: ApplicationStatus.ConditionalApproval,
+                unconditional: ApplicationStatus.UnconditionalApproval,
                 unconditional_approval: ApplicationStatus.UnconditionalApproval,
                 settled: ApplicationStatus.Settled,
                 declined: ApplicationStatus.Declined,
@@ -320,11 +323,11 @@ export const crmService = {
                 brokerId: undefined,
                 financeDueDate: undefined,
                 loanSecurityAddress: app.property_address || undefined,
-                riskLevel: getMockApplicationRisk({
+                riskLevel: (app.risk_level as 'Low' | 'Medium' | 'High') || getMockApplicationRisk({
                     id: app.id,
                     status,
                     status_detail: 'Active',
-                    lastUpdated: app.created_at || '',
+                    lastUpdated: app.updated_at || app.created_at || '',
                 } as Application) as 'Low' | 'Medium' | 'High',
             };
         });
@@ -333,23 +336,121 @@ export const crmService = {
         return [];
     }
   },
-  getTasks: (): Promise<Task[]> => {
-    if (!currentFirm) return mockApiCall([]);
-    const firmTasks = [...MOCK_TASKS].filter(t => t.firmId === currentFirm!.id);
+  updateApplicationWorkflowStage: async (applicationId: string, newStatus: ApplicationStatus): Promise<void> => {
+    const workflowStage = APPLICATION_STATUS_TO_WORKFLOW[newStatus];
+    if (!workflowStage) throw new Error(`Invalid status: ${newStatus}`);
+    const { error } = await supabase
+        .from('applications')
+        .update({ workflow_stage: workflowStage })
+        .eq('id', applicationId);
+    if (error) throw error;
+  },
+  getTasks: async (): Promise<Task[]> => {
+    if (!currentFirm) return [];
+    try {
+        const supabaseFirmId = toSupabaseFirmId(currentFirm.id);
+        const { data, error } = await supabase
+            .from('tasks')
+            .select('*')
+            .eq('firm_id', supabaseFirmId)
+            .order('due_date', { ascending: true, nullsFirst: false })
+            .order('created_at', { ascending: false });
+        if (error) throw error;
 
-    const tasksWithAssignees = firmTasks.map(task => {
-        if (task.assigneeId) {
-            const assignee = MOCK_ADVISORS.find(a => a.id === task.assigneeId);
-            return {
-                ...task,
-                assigneeName: assignee?.name,
-                assigneeAvatarUrl: assignee?.avatarUrl,
-            };
+        const userIds = [...new Set((data || []).map(t => t.assigned_to).filter(Boolean))] as string[];
+        const usersMap = new Map<string, { name: string; photo_url?: string }>();
+        if (userIds.length > 0) {
+            const { data: usersData } = await supabase.from('users').select('id, first_name, last_name, photo_url').in('id', userIds);
+            (usersData || []).forEach(u => usersMap.set(u.id, { name: `${u.first_name || ''} ${u.last_name || ''}`.trim(), photo_url: u.photo_url }));
         }
-        return task;
-    });
 
-    return mockApiCall(tasksWithAssignees);
+        return (data || []).map(t => {
+            const assignee = t.assigned_to ? usersMap.get(t.assigned_to) : undefined;
+            const priorityMap: Record<string, 'High' | 'Medium' | 'Low'> = {
+                low: 'Low', medium: 'Medium', high: 'High',
+            };
+            const isCompleted = t.status === 'completed';
+            const taskType = t.task_type || 'to_do';
+            return {
+                id: t.id,
+                firmId: t.firm_id,
+                title: t.title,
+                description: t.description,
+                dueDate: t.due_date ? new Date(t.due_date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+                dueTime: t.due_time,
+                isCompleted,
+                priority: priorityMap[t.priority] || 'Medium',
+                taskType: taskType as Task['taskType'],
+                status: t.status as Task['status'],
+                clientId: t.client_id,
+                applicationId: t.application_id,
+                assigneeId: t.assigned_to,
+                assigneeName: assignee?.name,
+                assigneeAvatarUrl: assignee?.photo_url,
+                category: taskType === 'compliance' ? 'compliance' : undefined,
+                completedAt: t.completed_at,
+                createdAt: t.created_at,
+                updatedAt: t.updated_at,
+            };
+        });
+    } catch (err) {
+        console.error('Failed to load tasks:', err);
+        return [];
+    }
+  },
+  createTask: async (taskData: {
+    title: string;
+    description?: string;
+    taskType?: string;
+    priority?: string;
+    clientId?: string;
+    applicationId?: string;
+    assignedTo?: string;
+    dueDate: string;
+    dueTime?: string;
+  }): Promise<Task> => {
+    if (!currentFirm || !currentUser) throw new Error('Not logged in');
+    const supabaseFirmId = toSupabaseFirmId(currentFirm.id);
+    const currentUserId = currentUser.id;
+    const userUuid = UUID_REGEX.test(currentUserId) ? currentUserId : null;
+
+    const { data, error } = await supabase
+        .from('tasks')
+        .insert([{
+            firm_id: supabaseFirmId,
+            title: taskData.title,
+            description: taskData.description || null,
+            task_type: taskData.taskType || 'to_do',
+            priority: (taskData.priority || 'medium').toLowerCase(),
+            client_id: taskData.clientId || null,
+            application_id: taskData.applicationId || null,
+            assigned_to: (taskData.assignedTo && UUID_REGEX.test(taskData.assignedTo)) ? taskData.assignedTo : null,
+            due_date: taskData.dueDate || null,
+            due_time: taskData.dueTime || null,
+            status: 'pending',
+            created_by: userUuid,
+        }])
+        .select()
+        .single();
+    if (error) throw error;
+
+    return {
+        id: data.id,
+        firmId: data.firm_id,
+        title: data.title,
+        description: data.description,
+        dueDate: data.due_date ? new Date(data.due_date).toISOString().slice(0, 10) : '',
+        isCompleted: false,
+        priority: (data.priority === 'high' ? 'High' : data.priority === 'low' ? 'Low' : 'Medium') as 'High' | 'Medium' | 'Low',
+        taskType: (data.task_type || 'to_do') as Task['taskType'],
+        status: data.status,
+        clientId: data.client_id,
+        applicationId: data.application_id,
+        assigneeId: data.assigned_to,
+        category: data.task_type === 'compliance' ? 'compliance' : undefined,
+        createdAt: data.created_at,
+        updatedAt: data.updated_at,
+    };
   },
   getDocuments: async (clientId?: string) => {
     if (!currentFirm) return [];
@@ -763,6 +864,7 @@ export const crmService = {
   addNote: async (noteData: Omit<Note, 'id' | 'createdAt' | 'firmId'>): Promise<Note> => {
     if (!currentFirm) return Promise.reject("No firm context");
     const supabaseFirmId = toSupabaseFirmId(currentFirm.id);
+    const authorId = (noteData.authorId && UUID_REGEX.test(noteData.authorId)) ? noteData.authorId : null;
     const { data, error } = await supabase
         .from('notes')
         .insert([{
@@ -770,7 +872,7 @@ export const crmService = {
             client_id: noteData.clientId,
             application_id: noteData.applicationId || null,
             content: noteData.content,
-            author_id: noteData.authorId || null,
+            author_id: authorId,
             author_name: noteData.authorName,
             author_avatar_url: noteData.authorAvatarUrl || null,
         }])
@@ -890,7 +992,9 @@ export const crmService = {
     const workflowToStatus: Record<string, ApplicationStatus> = {
         draft: ApplicationStatus.Draft,
         submitted: ApplicationStatus.ApplicationSubmitted,
+        conditional: ApplicationStatus.ConditionalApproval,
         conditional_approval: ApplicationStatus.ConditionalApproval,
+        unconditional: ApplicationStatus.UnconditionalApproval,
         unconditional_approval: ApplicationStatus.UnconditionalApproval,
         settled: ApplicationStatus.Settled,
         declined: ApplicationStatus.Declined,
@@ -1334,19 +1438,44 @@ export const crmService = {
       };
   },
 
-  updateTask: (taskId: string, updates: Partial<Pick<Task, 'dueDate' | 'assigneeId' | 'recurring' | 'isCompleted' | 'priority' | 'title'>>): Promise<Task> => {
-      const taskIndex = MOCK_TASKS.findIndex(t => t.id === taskId);
-      if (taskIndex > -1) {
-          MOCK_TASKS[taskIndex] = { ...MOCK_TASKS[taskIndex], ...updates };
-          const assignee = MOCK_ADVISORS.find(a => a.id === MOCK_TASKS[taskIndex].assigneeId);
-          const updatedTaskWithAssignee = {
-              ...MOCK_TASKS[taskIndex],
-              assigneeName: assignee?.name,
-              assigneeAvatarUrl: assignee?.avatarUrl,
-          }
-          return mockApiCall(updatedTaskWithAssignee);
+  updateTask: async (taskId: string, updates: Partial<Pick<Task, 'dueDate' | 'assigneeId' | 'recurring' | 'isCompleted' | 'priority' | 'title'>>): Promise<Task> => {
+      const payload: Record<string, unknown> = {};
+      if (updates.title !== undefined) payload.title = updates.title;
+      if (updates.dueDate !== undefined) payload.due_date = updates.dueDate;
+      if (updates.assigneeId !== undefined) payload.assigned_to = (updates.assigneeId && UUID_REGEX.test(updates.assigneeId)) ? updates.assigneeId : null;
+      if (updates.priority !== undefined) payload.priority = (updates.priority || 'medium').toLowerCase();
+      if (updates.isCompleted !== undefined) {
+          payload.status = updates.isCompleted ? 'completed' : 'pending';
+          payload.completed_at = updates.isCompleted ? new Date().toISOString() : null;
       }
-      return Promise.reject('Task not found');
+
+      const { data, error } = await supabase
+          .from('tasks')
+          .update(payload)
+          .eq('id', taskId)
+          .select()
+          .single();
+      if (error) throw error;
+
+      const priorityMap: Record<string, 'High' | 'Medium' | 'Low'> = { low: 'Low', medium: 'Medium', high: 'High' };
+      return {
+          id: data.id,
+          firmId: data.firm_id,
+          title: data.title,
+          description: data.description,
+          dueDate: data.due_date ? new Date(data.due_date).toISOString().slice(0, 10) : '',
+          isCompleted: data.status === 'completed',
+          priority: priorityMap[data.priority] || 'Medium',
+          taskType: (data.task_type || 'to_do') as Task['taskType'],
+          status: data.status,
+          clientId: data.client_id,
+          applicationId: data.application_id,
+          assigneeId: data.assigned_to,
+          category: data.task_type === 'compliance' ? 'compliance' : undefined,
+          completedAt: data.completed_at,
+          createdAt: data.created_at,
+          updatedAt: data.updated_at,
+      };
   },
 
   getAllDataForAI: async () => {
