@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import type { CallTranscript, Client, Lead } from '../../types';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import { Modal } from './Modal';
 import { Button } from './Button';
 import { Icon } from './Icon';
@@ -137,3 +137,4 @@ export const CallDetailModal: React.FC<CallDetailModalProps> = ({ call, onClose,
         </Modal>
     );
 };
+

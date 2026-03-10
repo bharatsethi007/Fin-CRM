@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { Note, Task } from '../../types';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import { Modal } from './Modal';
 import { Button } from './Button';
 import { Icon } from './Icon';
@@ -108,3 +108,4 @@ export const ConvertToTaskModal: React.FC<ConvertToTaskModalProps> = ({ note, on
     </Modal>
   );
 };
+

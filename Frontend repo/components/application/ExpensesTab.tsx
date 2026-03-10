@@ -45,7 +45,7 @@ type ExpenseForm = Record<string, number | string>;
 
 function toForm(exp: Expense | null): ExpenseForm {
   const f: ExpenseForm = { household_name: '' };
-  EXPENSE_CATEGORIES.forEach(c => { f[c.key] = exp?.[c.key] ?? ''; });
+  EXPENSE_CATEGORIES.forEach(c => { f[c.key] = (exp as any)?.[c.key] ?? ''; });
   if (exp) f.household_name = exp.household_name ?? '';
   return f;
 }

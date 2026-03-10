@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import type { Client, Lead } from '../../types';
 import { Icon } from './Icon';
 import { Button } from './Button';
@@ -129,3 +129,4 @@ export const ChooseRecordModal: React.FC<ChooseRecordModalProps> = ({ isOpen, on
     </div>
   );
 };
+

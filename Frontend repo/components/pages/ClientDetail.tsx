@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../services/supabaseClient';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import type { Client, Advisor, Application } from '../../types';
 import { ApplicationStatus } from '../../types';
 import LoanApplicationForm from './LoanApplicationForm';
@@ -399,3 +399,4 @@ const ClientDetail: React.FC<ClientDetailProps> = ({ client, advisors = [], appl
 };
 
 export default ClientDetail;
+

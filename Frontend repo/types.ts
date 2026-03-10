@@ -133,7 +133,6 @@ export interface Advisor {
     email: string;
     avatarUrl: string;
     role: 'admin' | 'broker';
-    password?: string; // For mock authentication
     preferredTimezone?: string;
     startWeekOn?: 'Sunday' | 'Monday';
 }

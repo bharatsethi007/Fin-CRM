@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import type { Task, TaskComment, Advisor } from '../../types';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import { Modal } from './Modal';
 import { Button } from './Button';
 import { Icon } from './Icon';
@@ -208,3 +208,4 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({ task, onClose,
     </Modal>
   );
 };
+

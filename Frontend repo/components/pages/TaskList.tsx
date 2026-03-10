@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import type { Task } from '../../types';
 import { Button } from '../common/Button';
 import { Icon } from '../common/Icon';
@@ -231,3 +231,4 @@ const TaskList: React.FC = () => {
 };
 
 export default TaskList;
+

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Modal } from './Modal';
 import { Button } from './Button';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import type { Task, Client, Advisor } from '../../types';
 
 const TASK_TYPES = [
@@ -210,3 +210,4 @@ export const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onS
     </Modal>
   );
 };
+

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Icon } from '../common/Icon';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import type { Advisor, Notification } from '../../types';
 
 interface HeaderProps {

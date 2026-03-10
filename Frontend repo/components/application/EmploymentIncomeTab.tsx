@@ -41,7 +41,7 @@ export const EmploymentIncomeTab: React.FC<EmploymentIncomeTabProps> = ({ applic
 
   useEffect(() => { fetch(); }, [applicationId]);
 
-  const totalIncome = Object.values(incomeByApplicant).flat().reduce((sum, i) => sum + (Number(i.annual_gross_total) || 0), 0);
+  const totalIncome = (Object.values(incomeByApplicant).flat() as Income[]).reduce((sum, i) => sum + (Number(i.annual_gross_total) || 0), 0);
 
   if (isLoading) return <div className="flex justify-center py-8"><Icon name="Loader" className="h-8 w-8 animate-spin" /></div>;
 

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import type { KYCDocument } from '../../types';
 import { KYC_SECTION_LABELS, KYC_SECTIONS, REMINDER_OPTIONS } from '../../types';
 import type { KYCSection } from '../../types';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import { Icon } from './Icon';
 import { Modal } from './Modal';
 import { Button } from './Button';
@@ -444,3 +444,4 @@ const KYCTab: React.FC<KYCTabProps> = ({ clientId, clientName, onUpdated }) => {
 };
 
 export default KYCTab;
+

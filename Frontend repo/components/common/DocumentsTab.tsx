@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import type { Document, DocumentFolder } from '../../types';
 import { DOCUMENT_CATEGORIES } from '../../types';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import { Icon } from './Icon';
 import { Modal } from './Modal';
 import { Button } from './Button';
@@ -135,7 +135,7 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDo
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
-    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/') || f.type === 'application/pdf' || f.name.match(/\.(pdf|doc|docx|xls|xlsx|jpg|jpeg|png|gif)$/i));
+    const files = Array.from(e.dataTransfer.files as FileList).filter((f: File) => f.type.startsWith('image/') || f.type === 'application/pdf' || f.name.match(/\.(pdf|doc|docx|xls|xlsx|jpg|jpeg|png|gif)$/i)) as File[];
     if (files.length > 0) {
       setPendingFiles(files);
       setShowCategoryModal(true);
@@ -237,7 +237,7 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDo
     if (ids.length === 0) return;
     setIsMoving(true);
     try {
-      await crmService.moveDocumentsToFolder(ids, moveTargetFolderId);
+      await crmService.moveDocumentsToFolder(Array.from(selectedForShare) as string[], moveTargetFolderId);
       setShowMoveModal(false);
       setSelectedForShare(new Set());
       fetchDocuments();
@@ -524,7 +524,7 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDo
                   {isExpanded && (() => {
                     const catGroups = groupDocumentsByCategory(docs);
                     const categoriesWithDocs = DOCUMENT_CATEGORIES.filter(cat => (catGroups[cat]?.length ?? 0) > 0)
-                      .concat(Object.keys(catGroups).filter(cat => !DOCUMENT_CATEGORIES.includes(cat)));
+                      .concat(Object.keys(catGroups).filter(cat => !DOCUMENT_CATEGORIES.includes(cat as typeof DOCUMENT_CATEGORIES[number])) as any);
                     return (
                     <div className="border-t border-gray-200 dark:border-gray-600">
                       {categoriesWithDocs.map(category => {
@@ -907,3 +907,4 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDo
 };
 
 export default DocumentsTab;
+

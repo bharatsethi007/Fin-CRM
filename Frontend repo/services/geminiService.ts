@@ -1,10 +1,20 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { crmService } from "./crmService";
+import { crmService } from "./api";
 import type { Client, AIRecommendationResponse, BankRates, AIComplianceResult } from '../types';
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const GEMINI_KEY = (typeof process !== 'undefined' && (process.env?.API_KEY ?? process.env?.GEMINI_API_KEY)) || '';
+const hasGeminiKey = GEMINI_KEY && String(GEMINI_KEY) !== 'undefined';
+
+function getAi(): GoogleGenAI | null {
+  if (!hasGeminiKey) return null;
+  return new GoogleGenAI({ apiKey: String(GEMINI_KEY) });
+}
+
+export const isGeminiConfigured = (): boolean => hasGeminiKey;
 
 const getDashboardInsights = async (prompt: string): Promise<string> => {
+  const ai = getAi();
+  if (!ai) throw new Error('Gemini API key is not configured. Add GEMINI_API_KEY in environment variables to enable AI features.');
   try {
     const crmData = await crmService.getAllDataForAI();
     // We simplify the data to only include key fields to fit within the prompt limits
@@ -49,6 +59,8 @@ const getLenderRecommendation = async (
   lendingDetails: { loanAmount: number; purpose: string; term: number },
   interestRates: BankRates[]
 ): Promise<Omit<AIRecommendationResponse, 'recommendationId'>> => {
+    const ai = getAi();
+    if (!ai) throw new Error('Gemini API key is not configured. Add GEMINI_API_KEY in environment variables to enable AI features.');
     try {
         const fullPrompt = `
         You are an expert mortgage advisor AI for AdvisorFlow in New Zealand. Your task is to provide lender recommendations for a client based on their profile, loan requirements, and current interest rates.
@@ -133,6 +145,8 @@ const getLenderRecommendation = async (
 };
 
 const summarizeAndExtractActions = async (transcript: string): Promise<{ summary: string; actions: string[] }> => {
+    const ai = getAi();
+    if (!ai) throw new Error('Gemini API key is not configured. Add GEMINI_API_KEY in environment variables to enable AI features.');
     try {
         const fullPrompt = `
         You are an AI assistant for a mortgage broker. Your task is to process a meeting transcript.
@@ -179,6 +193,8 @@ const summarizeAndExtractActions = async (transcript: string): Promise<{ summary
 };
 
 const analyzeCompliance = async (text: string): Promise<AIComplianceResult> => {
+    const ai = getAi();
+    if (!ai) throw new Error('Gemini API key is not configured. Add GEMINI_API_KEY in environment variables to enable AI features.');
     try {
         const fullPrompt = `
         You are a compliance officer AI for a financial advisory firm in New Zealand.

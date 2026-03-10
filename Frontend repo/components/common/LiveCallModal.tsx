@@ -157,8 +157,14 @@ export const LiveCallModal: React.FC<LiveCallModalProps> = ({ isOpen, onClose, o
         currentOutputTranscriptionRef.current = '';
 
         try {
+            const raw = typeof process !== 'undefined' ? (process.env?.API_KEY ?? process.env?.GEMINI_API_KEY) : '';
+            const apiKey = raw && String(raw) !== 'undefined' ? String(raw) : '';
+            if (!apiKey) {
+                setStatus('error');
+                return;
+            }
             if (!aiRef.current) {
-                aiRef.current = new GoogleGenAI({ apiKey: process.env.API_KEY });
+                aiRef.current = new GoogleGenAI({ apiKey });
             }
             const ai = aiRef.current;
 

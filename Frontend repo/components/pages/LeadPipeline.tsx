@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import type { Lead } from '../../types';
 import { LeadStatus } from '../../types';
 import { LEAD_STATUS_COLUMNS } from '../../constants';
@@ -91,3 +91,4 @@ const LeadPipeline: React.FC = () => {
 };
 
 export default LeadPipeline;
+

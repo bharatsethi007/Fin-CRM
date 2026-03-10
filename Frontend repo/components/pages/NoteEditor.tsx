@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import type { Client, Lead, Task } from '../../types';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import { Button } from '../common/Button';
 import { Icon } from '../common/Icon';
 
@@ -118,3 +118,4 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ record, onSave, onBack }
         </div>
     );
 };
+

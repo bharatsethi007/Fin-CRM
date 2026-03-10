@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import type { Note, Client, Lead } from '../../types';
 import { Button } from '../common/Button';
 import { Icon } from '../common/Icon';
@@ -100,3 +100,4 @@ const NotesPage: React.FC = () => {
 };
 
 export default NotesPage;
+

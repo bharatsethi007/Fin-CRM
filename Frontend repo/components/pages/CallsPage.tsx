@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import type { Client, CallTranscript, Lead } from '../../types';
 import { Button } from '../common/Button';
 import { Icon } from '../common/Icon';
@@ -144,3 +144,4 @@ const CallsPage: React.FC = () => {
 };
 
 export default CallsPage;
+

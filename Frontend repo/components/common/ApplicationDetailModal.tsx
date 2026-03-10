@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import type { Application, Client, Note, Document } from '../../types';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import { geminiService } from '../../services/geminiService';
 import { Modal } from './Modal';
 import { Button } from './Button';
@@ -335,3 +335,4 @@ export const ApplicationDetailModal: React.FC<ApplicationDetailModalProps> = ({ 
         </div>
     );
 };
+

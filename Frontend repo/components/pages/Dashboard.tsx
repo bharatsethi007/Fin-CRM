@@ -4,7 +4,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, PieC
 import { Card } from '../common/Card';
 import { Icon, IconName } from '../common/Icon';
 import { Button } from '../common/Button';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import type { Application, BankRates, Advisor } from '../../types';
 import { ApplicationStatus } from '../../types';
 
@@ -507,3 +507,4 @@ const Dashboard: React.FC<DashboardProps> = ({ setCurrentView, navigateToClient,
 };
 
 export default Dashboard;
+

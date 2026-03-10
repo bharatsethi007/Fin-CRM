@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import type { Application, Client } from '../../types';
 import { ApplicationStatus } from '../../types';
 import { APPLICATION_STATUS_COLUMNS } from '../../constants';

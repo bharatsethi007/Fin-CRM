@@ -4,7 +4,7 @@ import { SIDEBAR_NAV_ITEMS } from '../../constants';
 import { Icon } from '../common/Icon';
 import type { NavItem } from '../../constants';
 import type { Firm, Advisor } from '../../types';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 
 interface SidebarProps {
   currentView: string;

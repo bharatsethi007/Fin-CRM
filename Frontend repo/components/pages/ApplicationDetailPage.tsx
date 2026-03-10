@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { Application, Client, Note, Document } from '../../types';
 import { ApplicationStatus } from '../../types';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import { geminiService } from '../../services/geminiService';
 import { Button } from '../common/Button';
 import { Icon, IconName } from '../common/Icon';
@@ -107,7 +107,7 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({ ap
         setIsUploadingDoc(true);
         try {
             for (const file of files) {
-                await crmService.addDocument(client.id, file, 'Other');
+                await crmService.addDocument(client.id, file as File, 'Other');
             }
             await fetchData();
             onUpdate();

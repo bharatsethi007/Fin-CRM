@@ -3,7 +3,7 @@ import type { Client, Document, AIRecommendationResponse, OneRoofPropertyDetails
 import { Button } from '../common/Button';
 import { Icon, IconName } from '../common/Icon';
 import { Card } from '../common/Card';
-import { crmService } from '../../services/crmService';
+import { crmService } from '../../services/api';
 import { geminiService } from '../../services/geminiService';
 
 interface LoanApplicationFormProps {

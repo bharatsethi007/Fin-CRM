@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { supabase } from '../../services/supabaseClient';
-import { getCurrentFirm, toSupabaseFirmId } from '../../services/crmService';
+import { getCurrentFirm, toSupabaseFirmId } from '../../services/api';
 import type { Client } from '../../types';
 import { Button } from '../common/Button';
 import { ClientPortalStatus } from '../../types';
