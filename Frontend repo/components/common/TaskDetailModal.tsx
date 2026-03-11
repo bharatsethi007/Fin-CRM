@@ -71,9 +71,10 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({ task, onClose,
             recurring: editableTask.recurring as Task['recurring'],
         });
         onUpdate();
-    } catch (error) {
+    } catch (error: unknown) {
         console.error("Failed to save task:", error);
-        alert('Could not save task details.');
+        const message = error instanceof Error ? error.message : 'Could not save task details.';
+        alert(message);
         setIsSaving(false);
     }
   };

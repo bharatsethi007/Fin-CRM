@@ -24,7 +24,7 @@ export const crmService = {
     addCallTranscript: async (transcript: any) => { console.warn('Mock: addCallTranscript', transcript); },
     getTaskComments: async (taskId: string) => { return []; },
     addTaskComment: async (comment: any) => { console.warn('Mock: addTaskComment', comment); },
-    updateTask: async (id: string, updates: any) => { console.warn('Mock: updateTask', id, updates); },
+    updateTask: async (id: string, updates: any) => taskService.updateTask(id, updates),
     addTask: async (taskData: any) => taskService.createTask(taskData),
     createDraftApplication: async (clientId: string, clientName: string) => { console.warn('Mock: createDraftApplication', clientId); return { id: 'mock_'+Date.now() }; },
     saveLenderRecommendation: async (clientId: string, recommendation: any) => { console.warn('Mock: saveLenderRecommendation', clientId); },
@@ -32,6 +32,12 @@ export const crmService = {
     saveApplicationDraft: async (id: string, updates: any) => { console.warn('Mock: saveApplicationDraft', id); },
     submitApplication: async (id: string, data: any) => applicationService.updateApplicationWorkflowStage(id, 'Application Submitted' as any),
     updateApplicationDetails: async (id: string, updates: any) => { console.warn('Mock: updateApplicationDetails', id); },
+    createNote: async (noteData: any) => noteService.createNote({
+        content: noteData.content,
+        clientId: noteData.clientId,
+        applicationId: noteData.applicationId,
+    }),
+    updateNote: async (id: string, content: string) => noteService.updateNote(id, content),
     addNote: async (noteData: any) => noteService.addNote(noteData.content, noteData.clientId, noteData.applicationId),
     addDocument: async (clientId: string, file: File, category: string, folderId?: string) => documentService.addDocument(clientId, file, category, folderId),
     getAllDataForAI: async () => {

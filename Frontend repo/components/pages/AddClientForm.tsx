@@ -1,9 +1,7 @@
 import React, { useState } from 'react';
-import { supabase } from '../../services/supabaseClient';
-import { getCurrentFirm, toSupabaseFirmId } from '../../services/api';
+import { crmService } from '../../services/api';
 import type { Client } from '../../types';
 import { Button } from '../common/Button';
-import { ClientPortalStatus } from '../../types';
 
 interface Props {
   onBack: () => void;
@@ -37,72 +35,30 @@ const AddClientForm: React.FC<Props> = ({ onBack, onSuccess }) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    const firm = getCurrentFirm();
-    const firmId = toSupabaseFirmId(firm?.id);
-
     try {
-      const { data, error } = await supabase
-        .from('clients')
-        .insert([{
-          firm_id: firmId,
-          first_name: formData.firstName,
-          last_name: formData.lastName,
-          email: formData.email,
-          phone: formData.phone,
-          residential_address: formData.address,
-          city: formData.city || null,
-          postal_code: formData.postalCode || null,
-          date_of_birth: formData.dateOfBirth || null,
-          lead_source: formData.leadSource || null,
-          employment_status: formData.employmentStatus || null,
-          employer_name: formData.employerName || null,
-          notes: formData.notes || null,
-          assigned_to: null,
-          annual_income: toNum(formData.income),
-          annual_expenses: toNum(formData.expenses),
-          total_assets: toNum(formData.assets),
-          total_liabilities: toNum(formData.liabilities),
-          other_borrowings: toNum(formData.otherBorrowings),
-          credit_score: 0,
-          credit_score_provider: '',
-          portal_status: 'Not Setup',
-        }])
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      const newClient: Client = {
-        id: data.id,
-        firmId: data.firm_id,
-        name: `${data.first_name} ${data.last_name}`,
-        email: data.email,
-        phone: data.phone || '',
-        address: data.residential_address || '',
-        city: data.city || undefined,
-        postalCode: data.postal_code || undefined,
-        dateOfBirth: data.date_of_birth ? new Date(data.date_of_birth).toISOString().slice(0, 10) : undefined,
-        leadSource: data.lead_source || undefined,
-        employmentStatus: data.employment_status || undefined,
-        employerName: data.employer_name || undefined,
-        notes: data.notes || undefined,
-        dateAdded: new Date(data.created_at).toLocaleDateString('en-NZ'),
-        advisorId: data.assigned_to || '',
-        avatarUrl: data.photo_url || `https://i.pravatar.cc/150?u=${data.id}`,
-        financials: {
-          income: toNum(formData.income),
-          expenses: toNum(formData.expenses),
-          assets: toNum(formData.assets),
-          liabilities: toNum(formData.liabilities),
-          otherBorrowings: toNum(formData.otherBorrowings),
-        },
-        creditScore: { score: 0, provider: '', lastUpdated: '' },
-        portal: { status: ClientPortalStatus.NotSetup },
-      };
-
+      const newClient = await crmService.createClient({
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        email: formData.email,
+        phone: formData.phone || undefined,
+        leadSource: formData.leadSource || undefined,
+        notes: formData.notes || undefined,
+        residentialAddress: formData.address || undefined,
+        city: formData.city || undefined,
+        postalCode: formData.postalCode || undefined,
+        dateOfBirth: formData.dateOfBirth || undefined,
+        employmentStatus: formData.employmentStatus || undefined,
+        employerName: formData.employerName || undefined,
+        annualIncome: toNum(formData.income),
+        annualExpenses: toNum(formData.expenses),
+        totalAssets: toNum(formData.assets),
+        totalLiabilities: toNum(formData.liabilities),
+        otherBorrowings: toNum(formData.otherBorrowings),
+      });
       onSuccess(newClient);
-    } catch (err: any) {
-      alert('Error: ' + err.message);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Could not save client.';
+      alert('Error: ' + message);
     } finally {
       setLoading(false);
     }

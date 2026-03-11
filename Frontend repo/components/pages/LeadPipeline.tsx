@@ -44,6 +44,16 @@ const LeadPipeline: React.FC = () => {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Add Lead inline modal state
+  const [showAddLeadModal, setShowAddLeadModal] = useState(false);
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [leadSource, setLeadSource] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
     crmService.getLeads()
       .then(data => {
@@ -56,6 +66,43 @@ const LeadPipeline: React.FC = () => {
     return leads.filter(lead => lead.status === status);
   };
 
+  const resetAddLeadForm = () => {
+    setFirstName('');
+    setLastName('');
+    setEmail('');
+    setPhone('');
+    setLeadSource('');
+    setError(null);
+    setIsSubmitting(false);
+  };
+
+  const handleCreateLead = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!firstName.trim() || !lastName.trim() || !email.trim()) {
+      setError('First name, last name, and email are required.');
+      return;
+    }
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      const newLead = await crmService.createLead({
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        email: email.trim(),
+        phone: phone.trim() || undefined,
+        leadSource: leadSource || undefined,
+      });
+      setLeads(prev => [newLead, ...prev]);
+      resetAddLeadForm();
+      setShowAddLeadModal(false);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Could not create lead.';
+      setError(message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <div>
        <div className="flex justify-between items-center mb-6">
@@ -63,8 +110,93 @@ const LeadPipeline: React.FC = () => {
           <h2 className="text-2xl font-bold">Lead Pipeline</h2>
           <p className="text-gray-500 dark:text-gray-400">Track leads from creation to close.</p>
         </div>
-        <Button leftIcon="PlusCircle">Add Lead</Button>
+        <Button leftIcon="PlusCircle" onClick={() => setShowAddLeadModal(true)}>Add Lead</Button>
       </div>
+
+      {showAddLeadModal && (
+        <Card className="mb-6">
+          <form onSubmit={handleCreateLead} className="space-y-4">
+            {error && (
+              <div className="p-3 rounded-md bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 text-sm">
+                {error}
+              </div>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">First Name</label>
+                <input
+                  type="text"
+                  value={firstName}
+                  onChange={e => setFirstName(e.target.value)}
+                  className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Last Name</label>
+                <input
+                  type="text"
+                  value={lastName}
+                  onChange={e => setLastName(e.target.value)}
+                  className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
+                  required
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Phone</label>
+                <input
+                  type="tel"
+                  value={phone}
+                  onChange={e => setPhone(e.target.value)}
+                  className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Lead Source</label>
+              <select
+                value={leadSource}
+                onChange={e => setLeadSource(e.target.value)}
+                className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
+              >
+                <option value="">Select source</option>
+                <option value="Website">Website</option>
+                <option value="Referral">Referral</option>
+                <option value="Facebook">Facebook</option>
+                <option value="Walk-in">Walk-in</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  resetAddLeadForm();
+                  setShowAddLeadModal(false);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" isLoading={isSubmitting}>
+                Create Lead
+              </Button>
+            </div>
+          </form>
+        </Card>
+      )}
       
       {isLoading ? (
         <div className="flex justify-center items-center h-96">

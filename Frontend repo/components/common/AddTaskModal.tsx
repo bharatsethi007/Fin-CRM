@@ -50,8 +50,8 @@ export const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onS
     }
   }, [isOpen]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!title.trim()) {
       setError('Title is required');
       return;
@@ -102,7 +102,7 @@ export const AddTaskModal: React.FC<AddTaskModalProps> = ({ isOpen, onClose, onS
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button type="submit" isLoading={isSubmitting}>Create Task</Button>
+          <Button onClick={() => handleSubmit()} isLoading={isSubmitting}>Create Task</Button>
         </>
       }
     >

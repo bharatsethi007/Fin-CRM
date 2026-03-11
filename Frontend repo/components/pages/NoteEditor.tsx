@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import type { Client, Lead, Task } from '../../types';
+import type { Client, Lead, Task, Note } from '../../types';
 import { crmService } from '../../services/api';
 import { Button } from '../common/Button';
 import { Icon } from '../common/Icon';
@@ -9,19 +9,29 @@ type Record = (Client | Lead) & { recordType: 'Client' | 'Lead' };
 
 interface NoteEditorProps {
     record: Record;
+    note?: Note;
     onSave: () => void;
     onBack: () => void;
 }
 
-export const NoteEditor: React.FC<NoteEditorProps> = ({ record, onSave, onBack }) => {
-    const [content, setContent] = useState('');
+export const NoteEditor: React.FC<NoteEditorProps> = ({ record, note, onSave, onBack }) => {
+    const [title, setTitle] = useState(() => {
+        if (!note) return '';
+        const [first, ...rest] = note.content.split('\n');
+        return first || '';
+    });
+    const [content, setContent] = useState(() => {
+        if (!note) return '';
+        const [, ...rest] = note.content.split('\n');
+        return rest.join('\n');
+    });
     const [isFollowUp, setIsFollowUp] = useState(false);
     const [followUpDate, setFollowUpDate] = useState('');
     const [isSaving, setIsSaving] = useState(false);
 
     const handleSave = async () => {
-        if (!content.trim()) {
-            alert("Note content cannot be empty.");
+        if (!title.trim() && !content.trim()) {
+            alert("Note cannot be empty. Add a title or some content.");
             return;
         }
         if (isFollowUp && !followUpDate) {
@@ -29,31 +39,48 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ record, onSave, onBack }
             return;
         }
         
+        const baseClientId =
+          record.recordType === 'Client'
+            ? record.id
+            : (record as Lead).clientId || null;
+
+        if (!baseClientId) {
+          alert('This lead is not yet linked to a client, so notes cannot be saved. Convert it to a client first.');
+          return;
+        }
+
+        const combinedContent = title.trim()
+          ? `${title.trim()}\n\n${content}`.trim()
+          : content;
+
         setIsSaving(true);
         try {
-            const advisor = await crmService.getAdvisor();
-            await crmService.addNote({
-                clientId: record.recordType === 'Client' ? record.id : (record as Lead).clientId || '',
-                content,
-                authorId: advisor.id,
-                authorName: advisor.name,
-                authorAvatarUrl: advisor.avatarUrl,
-            });
+            if (note) {
+                await crmService.updateNote(note.id, combinedContent);
+            } else {
+                await crmService.createNote({
+                    clientId: baseClientId,
+                    content: combinedContent,
+                });
+            }
 
             if (isFollowUp) {
+                const advisor = await crmService.getAdvisor();
                 await crmService.addTask({
-                    title: `Follow up on note: "${content.substring(0, 50)}..."`,
+                    title: `Follow up on note: "${(title || content).substring(0, 50)}..."`,
+                    description: combinedContent,
                     dueDate: followUpDate,
                     priority: 'Medium',
                     clientId: record.recordType === 'Client' ? record.id : (record as Lead).clientId,
+                    assignedTo: advisor.id,
                 });
             }
 
             onSave();
 
-        } catch (error) {
+        } catch (error: unknown) {
             console.error("Failed to save note/task:", error);
-            alert("An error occurred. Please try again.");
+            alert(error instanceof Error ? error.message : "An error occurred. Please try again.");
         } finally {
             setIsSaving(false);
         }
@@ -62,34 +89,57 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ record, onSave, onBack }
     const inputClasses = "block w-full text-sm rounded-md border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50 focus:border-primary-500 focus:ring-primary-500 p-2";
 
     return (
-        <div className="max-w-3xl mx-auto">
-             <div className="flex justify-between items-center mb-6">
+        <div className="max-w-5xl mx-auto">
+             <div className="flex justify-between items-center mb-4">
                 <Button onClick={onBack} variant="secondary" leftIcon="ArrowLeft">
                     Back to Notes
                 </Button>
                 <Button onClick={handleSave} isLoading={isSaving} leftIcon="FileText">
-                    Save Note
+                    Save
                 </Button>
             </div>
             
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-                <div className="p-3 mb-4 bg-gray-50 dark:bg-gray-700/50 rounded-md border dark:border-gray-600 flex items-center">
-                    <Icon name={record.recordType === 'Client' ? 'Users' : 'Contact'} className="h-5 w-5 mr-3 text-gray-500" />
-                    <div>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">Note for {record.recordType}</p>
-                        <p className="font-semibold">{record.name}</p>
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 md:p-8">
+                {/* Header / context pill */}
+                <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-3">
+                        <Icon
+                            name={record.recordType === 'Client' ? 'Users' : 'Contact'}
+                            className="h-6 w-6 text-primary-500"
+                        />
+                        <div>
+                            <p className="text-xs uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                                Note for {record.recordType}
+                            </p>
+                            <p className="font-semibold text-sm text-gray-900 dark:text-gray-100">
+                                {record.name}
+                            </p>
+                        </div>
                     </div>
                 </div>
 
-                <textarea
-                    value={content}
-                    onChange={(e) => setContent(e.target.value)}
-                    rows={10}
-                    placeholder="Write your note here..."
-                    className={`${inputClasses} w-full`}
+                {/* Title */}
+                <input
+                    type="text"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="Untitled note"
+                    className="w-full text-2xl md:text-3xl font-semibold bg-transparent border-0 border-b border-transparent focus:border-gray-300 dark:focus:border-gray-600 focus:ring-0 mb-4 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
                 />
 
-                <div className="mt-4 pt-4 border-t dark:border-gray-700">
+                {/* Main editor area */}
+                <div className="mt-2">
+                    <textarea
+                        value={content}
+                        onChange={(e) => setContent(e.target.value)}
+                        rows={12}
+                        placeholder="Start typing your note..."
+                        className={`${inputClasses} w-full min-h-[260px] resize-vertical`}
+                    />
+                </div>
+
+                {/* Follow-up section */}
+                <div className="mt-6 pt-4 border-t dark:border-gray-700 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                     <label className="flex items-center cursor-pointer">
                         <input
                             type="checkbox"
@@ -97,12 +147,17 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ record, onSave, onBack }
                             onChange={(e) => setIsFollowUp(e.target.checked)}
                             className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                         />
-                        <span className="ml-2 text-sm font-medium">Follow up</span>
+                        <span className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                            Create follow-up task
+                        </span>
                     </label>
                     {isFollowUp && (
-                        <div className="mt-3">
-                            <label htmlFor="follow-up-date" className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
-                                Follow-up Date
+                        <div className="flex items-center gap-3">
+                            <label
+                                htmlFor="follow-up-date"
+                                className="block text-xs font-medium text-gray-500 dark:text-gray-400"
+                            >
+                                Follow-up date
                             </label>
                             <input
                                 type="date"

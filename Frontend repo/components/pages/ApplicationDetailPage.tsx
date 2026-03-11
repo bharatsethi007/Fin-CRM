@@ -154,23 +154,19 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({ ap
                 }
             }
             
-            const advisor = await crmService.getAdvisor();
-            await crmService.addNote({
+            await crmService.createNote({
                 clientId: client.id,
                 applicationId: application.id,
                 content,
-                authorId: advisor.id,
-                authorName: advisor.name,
-                authorAvatarUrl: advisor.avatarUrl,
             });
             setNewNoteContent('');
             setAuditResult(null); 
             setTranscript(''); 
             await fetchData(); 
             onUpdate(); 
-        } catch (error) {
+        } catch (error: unknown) {
             console.error('Failed to save note:', error);
-            alert('There was an error saving the note.');
+            alert(error instanceof Error ? error.message : 'There was an error saving the note.');
         } finally {
             setIsSubmittingNote(false);
         }
