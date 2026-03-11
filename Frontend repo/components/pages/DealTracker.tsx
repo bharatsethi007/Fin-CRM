@@ -81,6 +81,13 @@ const ApplicationTracker: React.FC = () => {
   const [dragOverStatus, setDragOverStatus] = useState<ApplicationStatus | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
 
+  // Add Application flow
+  const [showClientPicker, setShowClientPicker] = useState(false);
+  const [clientSearch, setClientSearch] = useState('');
+  const [pickedClient, setPickedClient] = useState<Client | null>(null);
+  const [isCreatingDraft, setIsCreatingDraft] = useState(false);
+  const [newDraft, setNewDraft] = useState<{ application: Application; client: Client } | null>(null);
+
   const fetchData = () => {
     setIsLoading(true);
     Promise.all([
@@ -122,6 +129,38 @@ const ApplicationTracker: React.FC = () => {
   const handleBackToList = () => {
     setSelectedApplication(null);
     setSelectedClient(null);
+  };
+
+  const handleStartNewApplication = async () => {
+    if (!pickedClient) return;
+    setIsCreatingDraft(true);
+    try {
+      const draft = await crmService.createDraftApplication(pickedClient.id, pickedClient.name);
+      const placeholderApp: Application = {
+        id: draft.id,
+        firmId: '',
+        referenceNumber: draft.referenceNumber,
+        clientName: pickedClient.name,
+        clientId: pickedClient.id,
+        advisorId: '',
+        lender: '',
+        loanAmount: 0,
+        status: ApplicationStatus.Draft,
+        estSettlementDate: '',
+        status_detail: 'Active',
+        lastUpdated: new Date().toISOString(),
+        updatedByName: '',
+      };
+      setShowClientPicker(false);
+      setPickedClient(null);
+      setClientSearch('');
+      setNewDraft({ application: placeholderApp, client: pickedClient });
+    } catch (err) {
+      console.error('Failed to create application:', err);
+      alert('Could not create application. Please try again.');
+    } finally {
+      setIsCreatingDraft(false);
+    }
   };
 
   const handleDragStart = (e: React.DragEvent, application: Application) => {
@@ -204,6 +243,24 @@ const ApplicationTracker: React.FC = () => {
     );
   }
 
+  if (newDraft) {
+    return (
+      <LoanApplicationForm
+        client={newDraft.client}
+        draftApplication={{ id: newDraft.application.id, referenceNumber: newDraft.application.referenceNumber }}
+        isEditMode={false}
+        onBack={() => { setNewDraft(null); handleUpdate(); }}
+        onSuccess={handleUpdate}
+        onApplicationsUpdated={() => { setNewDraft(null); handleUpdate(); }}
+      />
+    );
+  }
+
+  const filteredClients = clients.filter(c =>
+    c.name.toLowerCase().includes(clientSearch.toLowerCase()) ||
+    c.email.toLowerCase().includes(clientSearch.toLowerCase())
+  );
+
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
@@ -222,7 +279,7 @@ const ApplicationTracker: React.FC = () => {
                     List
                 </button>
             </div>
-            <Button leftIcon="PlusCircle">Add Application</Button>
+            <Button leftIcon="PlusCircle" onClick={() => setShowClientPicker(true)}>Add Application</Button>
         </div>
       </div>
 
@@ -296,6 +353,67 @@ const ApplicationTracker: React.FC = () => {
             </div>
         )}
         </>
+      )}
+
+      {/* Client Picker Modal */}
+      {showClientPicker && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md flex flex-col max-h-[80vh]">
+            <div className="flex items-center justify-between p-5 border-b dark:border-gray-700">
+              <h3 className="text-lg font-semibold">Select Client</h3>
+              <button onClick={() => { setShowClientPicker(false); setPickedClient(null); setClientSearch(''); }} className="text-gray-400 hover:text-gray-600">
+                <Icon name="X" className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="p-4">
+              <div className="relative">
+                <Icon name="Search" className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search clients..."
+                  value={clientSearch}
+                  onChange={e => setClientSearch(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 text-sm rounded-md border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  autoFocus
+                />
+              </div>
+            </div>
+            <ul className="overflow-y-auto flex-1 px-4 pb-2 space-y-1">
+              {filteredClients.length === 0 && (
+                <li className="text-sm text-gray-500 text-center py-6">No clients found.</li>
+              )}
+              {filteredClients.map(client => (
+                <li key={client.id}>
+                  <button
+                    onClick={() => setPickedClient(client)}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${
+                      pickedClient?.id === client.id
+                        ? 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300'
+                        : 'hover:bg-gray-100 dark:hover:bg-gray-700'
+                    }`}
+                  >
+                    <img src={client.avatarUrl} alt={client.name} className="h-8 w-8 rounded-full flex-shrink-0" />
+                    <div>
+                      <p className="text-sm font-medium">{client.name}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">{client.email}</p>
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="p-4 border-t dark:border-gray-700 flex justify-end gap-3">
+              <Button variant="secondary" onClick={() => { setShowClientPicker(false); setPickedClient(null); setClientSearch(''); }}>Cancel</Button>
+              <Button
+                onClick={handleStartNewApplication}
+                disabled={!pickedClient}
+                isLoading={isCreatingDraft}
+                leftIcon="PlusCircle"
+              >
+                Start Application
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

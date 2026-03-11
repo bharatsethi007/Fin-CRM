@@ -6,7 +6,84 @@ import { authService } from './authService';
 import { toSupabaseFirmId } from './clientService';
 import { getMockApplicationRisk } from './mockData';
 
+function generateReferenceNumber(): string {
+    const date = new Date();
+    const ymd = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
+    const rand = Math.floor(1000 + Math.random() * 9000);
+    return `AF-${ymd}-${rand}`;
+}
+
+export interface CreateApplicationInput {
+    clientId: string;
+    applicationType?: string;
+    loanAmount?: number;
+    depositAmount?: number;
+    assignedTo?: string;
+}
+
+export interface UpdateApplicationInput {
+    lender?: string;
+    loanAmount?: number;
+    estSettlementDate?: string;
+    lenderReferenceNumber?: string;
+    brokerId?: string;
+    financeDueDate?: string;
+    loanSecurityAddress?: string;
+    applicationType?: string;
+    depositAmount?: number;
+    workflowStage?: string;
+}
+
 export const applicationService = {
+  createApplication: async (input: CreateApplicationInput): Promise<{ id: string; referenceNumber: string }> => {
+    const currentFirm = authService.getCurrentFirm();
+    const currentAdvisor = authService.getAdvisor();
+    if (!currentFirm) throw new Error('No firm found. Please log in again.');
+
+    const supabaseFirmId = toSupabaseFirmId(currentFirm.id);
+    const referenceNumber = generateReferenceNumber();
+    const assignedTo = input.assignedTo || (currentAdvisor ? (await currentAdvisor).id : null);
+
+    const { data, error } = await supabase
+        .from('applications')
+        .insert([{
+            client_id: input.clientId,
+            firm_id: supabaseFirmId,
+            assigned_to: assignedTo,
+            reference_number: referenceNumber,
+            application_type: input.applicationType || 'Home Loan',
+            loan_amount: input.loanAmount || 0,
+            deposit_amount: input.depositAmount || 0,
+            workflow_stage: 'draft',
+            status: 'active',
+        }])
+        .select('id, reference_number')
+        .single();
+
+    if (error) throw error;
+    return { id: data.id, referenceNumber: data.reference_number };
+  },
+
+  updateApplication: async (id: string, updates: UpdateApplicationInput): Promise<void> => {
+    const dbUpdates: Record<string, unknown> = {};
+    if (updates.lender !== undefined)              dbUpdates.lender_name = updates.lender;
+    if (updates.loanAmount !== undefined)          dbUpdates.loan_amount = updates.loanAmount;
+    if (updates.depositAmount !== undefined)       dbUpdates.deposit_amount = updates.depositAmount;
+    if (updates.estSettlementDate !== undefined)   dbUpdates.settlement_date = updates.estSettlementDate || null;
+    if (updates.lenderReferenceNumber !== undefined) dbUpdates.lender_product = updates.lenderReferenceNumber;
+    if (updates.brokerId !== undefined)            dbUpdates.broker_id = updates.brokerId;
+    if (updates.financeDueDate !== undefined)      dbUpdates.finance_due_date = updates.financeDueDate || null;
+    if (updates.loanSecurityAddress !== undefined) dbUpdates.property_address = updates.loanSecurityAddress;
+    if (updates.applicationType !== undefined)     dbUpdates.application_type = updates.applicationType;
+    if (updates.workflowStage !== undefined)       dbUpdates.workflow_stage = updates.workflowStage;
+
+    if (Object.keys(dbUpdates).length === 0) return;
+    dbUpdates.updated_at = new Date().toISOString();
+
+    const { error } = await supabase.from('applications').update(dbUpdates).eq('id', id);
+    if (error) throw error;
+  },
+
   getApplications: async (): Promise<Application[]> => {
     const currentFirm = authService.getCurrentFirm();
     if (!currentFirm) return [];
