@@ -5,7 +5,7 @@ import type { BankRates, AIRecommendationResponse } from '../../types';
 import { Button } from '../common/Button';
 import { Icon, IconName } from '../common/Icon';
 import { Card } from '../common/Card';
-import { applicationService, type Applicant, type Company } from '../../services/applicationService';
+import { applicationService, type Applicant, type Company, type Income } from '../../services/applicationService';
 import { crmService } from '../../services/api';
 import { geminiService } from '../../services/geminiService';
 
@@ -103,6 +103,16 @@ const PREFERRED_CONTACT = ['Phone', 'Email'] as const;
 const RESIDENTIAL_STATUSES = ['Own Home - Mortgage', 'Own Home - No Mortgage', 'Renting', 'Boarding', 'Living with Parents'] as const;
 const RESIDENCY_STATUSES = ['NZ Citizen', 'NZ Permanent Resident', 'NZ Resident', 'Australian Citizen', 'Work Visa', 'Student Visa', 'Other'] as const;
 const MARITAL_STATUSES = ['Single', 'Married', 'De Facto', 'Separated', 'Divorced', 'Widowed'] as const;
+
+const INCOME_TYPES = [
+  { value: 'salary_wages', label: 'Salary/Wages' },
+  { value: 'self_employed_sole', label: 'Self Employed — Sole Trader' },
+  { value: 'self_employed_company', label: 'Self Employed — Company' },
+  { value: 'rental', label: 'Rental Income' },
+  { value: 'other', label: 'Other Income' },
+] as const;
+
+const FREQUENCIES = ['Weekly', 'Fortnightly', 'Monthly', 'Annually'] as const;
 
 const FormSection: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
   <div className="mb-6">
@@ -208,24 +218,50 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
   }, [detail]);
 
   useEffect(() => {
-    if (activeTab === 'applicants' && application.id) {
+    if ((activeTab === 'applicants' || activeTab === 'income') && application.id) {
       setApplicantsLoading(true);
-      Promise.all([
-        applicationService.getApplicants(application.id),
-        applicationService.getCompanies(application.id),
-      ])
-        .then(([applicantsData, companiesData]) => {
-          setApplicants(applicantsData || []);
-          setCompanies(companiesData || []);
-        })
-        .catch((err) => {
-          console.error('Failed to load applicants/companies:', err);
-          setApplicants([]);
-          setCompanies([]);
-        })
-        .finally(() => setApplicantsLoading(false));
+      if (activeTab === 'applicants') {
+        Promise.all([
+          applicationService.getApplicants(application.id),
+          applicationService.getCompanies(application.id),
+        ])
+          .then(([applicantsData, companiesData]) => {
+            setApplicants(applicantsData || []);
+            setCompanies(companiesData || []);
+          })
+          .catch((err) => {
+            console.error('Failed to load applicants/companies:', err);
+            setApplicants([]);
+            setCompanies([]);
+          })
+          .finally(() => setApplicantsLoading(false));
+      } else {
+        applicationService
+          .getApplicants(application.id)
+          .then((data) => setApplicants(data || []))
+          .catch(() => setApplicants([]))
+          .finally(() => setApplicantsLoading(false));
+      }
     }
   }, [activeTab, application.id]);
+
+  const [incomeByApplicantId, setIncomeByApplicantId] = useState<Record<string, Income[]>>({});
+  const [incomeTabLoading, setIncomeTabLoading] = useState(false);
+  useEffect(() => {
+    if (activeTab === 'income' && application.id && applicants.length > 0) {
+      setIncomeTabLoading(true);
+      Promise.all(applicants.map((a) => applicationService.getIncome(a.id)))
+        .then((results) => {
+          const map: Record<string, Income[]> = {};
+          applicants.forEach((a, i) => {
+            map[a.id] = results[i] || [];
+          });
+          setIncomeByApplicantId(map);
+        })
+        .catch(() => setIncomeByApplicantId({}))
+        .finally(() => setIncomeTabLoading(false));
+    }
+  }, [activeTab, application.id, applicants.length, applicants.map((a) => a.id).join(',')]);
 
   useEffect(() => {
     let cancelled = false;
@@ -362,6 +398,47 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
     setCompanyFormError(null);
   };
 
+  const emptyIncomeForm = () => ({
+    income_type: '',
+    gross_salary: '',
+    salary_frequency: 'Monthly',
+    allowances: '',
+    allowances_frequency: 'Monthly',
+    bonus: '',
+    bonus_frequency: 'Monthly',
+    commission: '',
+    commission_frequency: 'Monthly',
+    overtime: '',
+    overtime_frequency: 'Monthly',
+    overtime_guaranteed: false,
+    business_name: '',
+    tax_year: '',
+    gross_sales: '',
+    profit_before_tax: '',
+    depreciation: '',
+    interest_addbacks: '',
+    non_recurring_expenses: '',
+    tax_paid: '',
+    previous_tax_year: '',
+    prev_gross_sales: '',
+    prev_profit_before_tax: '',
+    prev_depreciation: '',
+    prev_tax_paid: '',
+    rental_property_address: '',
+    rental_gross_monthly: '',
+    rental_ownership_percent: '100',
+    other_income_description: '',
+    other_income_amount: '',
+    other_income_frequency: 'Monthly',
+  });
+
+  const [showAddIncomeModal, setShowAddIncomeModal] = useState(false);
+  const [incomeModalApplicant, setIncomeModalApplicant] = useState<Applicant | null>(null);
+  const [editingIncome, setEditingIncome] = useState<Income | null>(null);
+  const [incomeForm, setIncomeForm] = useState(emptyIncomeForm());
+  const [incomeFormError, setIncomeFormError] = useState<string | null>(null);
+  const [submittingIncome, setSubmittingIncome] = useState(false);
+
   const resetApplicantForm = () => {
     setApplicantForm(emptyApplicantForm());
     setApplicantFormError(null);
@@ -453,6 +530,178 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
       setToastMessage('Company removed');
     } catch (err) {
       setToastMessage(err instanceof Error ? err.message : 'Failed to remove company');
+    }
+  };
+
+  const getApplicantDisplayName = (a: Applicant) =>
+    [a.title, a.first_name, a.middle_name, a.surname].filter(Boolean).join(' ').trim() || 'Applicant';
+
+  const frequencyToAnnualMultiplier = (freq: string): number => {
+    switch (freq) {
+      case 'Weekly': return 52;
+      case 'Fortnightly': return 26;
+      case 'Monthly': return 12;
+      case 'Annually': return 1;
+      default: return 12;
+    }
+  };
+
+  const computeAnnualFromIncome = (inc: Income): number => {
+    const type = (inc.income_type as string) || '';
+    if (type === 'salary_wages' && inc.annual_gross_total != null) return Number(inc.annual_gross_total);
+    if ((type === 'self_employed_sole' || type === 'self_employed_company') && inc.net_profit != null) return Number(inc.net_profit);
+    if (type === 'rental') {
+      const monthly = Number(inc.rental_gross_monthly) || 0;
+      const pct = Number(inc.rental_ownership_percent) || 100;
+      return monthly * 12 * (pct / 100);
+    }
+    if (type === 'other') {
+      const amt = Number(inc.other_income_amount) || 0;
+      const mult = frequencyToAnnualMultiplier((inc.other_income_frequency as string) || 'Monthly');
+      return amt * mult;
+    }
+    return 0;
+  };
+
+  const incomeToForm = (inc: Income) => ({
+    income_type: (inc.income_type as string) || '',
+    gross_salary: inc.gross_salary != null ? String(inc.gross_salary) : '',
+    salary_frequency: (inc.salary_frequency as string) || 'Monthly',
+    allowances: inc.allowances != null ? String(inc.allowances) : '',
+    allowances_frequency: (inc.allowances_frequency as string) || 'Monthly',
+    bonus: inc.bonus != null ? String(inc.bonus) : '',
+    bonus_frequency: (inc.bonus_frequency as string) || 'Monthly',
+    commission: inc.commission != null ? String(inc.commission) : '',
+    commission_frequency: (inc.commission_frequency as string) || 'Monthly',
+    overtime: inc.overtime != null ? String(inc.overtime) : '',
+    overtime_frequency: (inc.overtime_frequency as string) || 'Monthly',
+    overtime_guaranteed: Boolean(inc.overtime_guaranteed),
+    business_name: (inc.business_name as string) || '',
+    tax_year: inc.tax_year != null ? String(inc.tax_year) : '',
+    gross_sales: inc.gross_sales != null ? String(inc.gross_sales) : '',
+    profit_before_tax: inc.profit_before_tax != null ? String(inc.profit_before_tax) : '',
+    depreciation: inc.depreciation != null ? String(inc.depreciation) : '',
+    interest_addbacks: inc.interest_addbacks != null ? String(inc.interest_addbacks) : '',
+    non_recurring_expenses: inc.non_recurring_expenses != null ? String(inc.non_recurring_expenses) : '',
+    tax_paid: inc.tax_paid != null ? String(inc.tax_paid) : '',
+    previous_tax_year: inc.previous_tax_year != null ? String(inc.previous_tax_year) : '',
+    prev_gross_sales: inc.prev_gross_sales != null ? String(inc.prev_gross_sales) : '',
+    prev_profit_before_tax: inc.prev_profit_before_tax != null ? String(inc.prev_profit_before_tax) : '',
+    prev_depreciation: inc.prev_depreciation != null ? String(inc.prev_depreciation) : '',
+    prev_tax_paid: inc.prev_tax_paid != null ? String(inc.prev_tax_paid) : '',
+    rental_property_address: (inc.rental_property_address as string) || '',
+    rental_gross_monthly: inc.rental_gross_monthly != null ? String(inc.rental_gross_monthly) : '',
+    rental_ownership_percent: inc.rental_ownership_percent != null ? String(inc.rental_ownership_percent) : '100',
+    other_income_description: (inc.other_income_description as string) || '',
+    other_income_amount: inc.other_income_amount != null ? String(inc.other_income_amount) : '',
+    other_income_frequency: (inc.other_income_frequency as string) || 'Monthly',
+  });
+
+  const computeSalaryAnnualTotal = (): number => {
+    const mul = (val: string, freq: string) => (Number(val) || 0) * frequencyToAnnualMultiplier(freq);
+    return (
+      mul(incomeForm.gross_salary, incomeForm.salary_frequency) +
+      mul(incomeForm.allowances, incomeForm.allowances_frequency) +
+      mul(incomeForm.bonus, incomeForm.bonus_frequency) +
+      mul(incomeForm.commission, incomeForm.commission_frequency) +
+      mul(incomeForm.overtime, incomeForm.overtime_frequency)
+    );
+  };
+
+  const computeSelfEmployedNetProfit = (): number => {
+    const pbt = Number(incomeForm.profit_before_tax) || 0;
+    const dep = Number(incomeForm.depreciation) || 0;
+    const addbacks = Number(incomeForm.interest_addbacks) || 0;
+    const nonRec = Number(incomeForm.non_recurring_expenses) || 0;
+    const tax = Number(incomeForm.tax_paid) || 0;
+    return pbt + addbacks - dep - nonRec - tax;
+  };
+
+  const buildIncomePayload = (): Partial<Income> => {
+    const type = incomeForm.income_type;
+    const payload: Partial<Income> & Record<string, unknown> = { income_type: type };
+    if (type === 'salary_wages') {
+      payload.gross_salary = Number(incomeForm.gross_salary) || undefined;
+      payload.salary_frequency = incomeForm.salary_frequency;
+      payload.allowances = Number(incomeForm.allowances) || undefined;
+      payload.allowances_frequency = incomeForm.allowances_frequency;
+      payload.bonus = Number(incomeForm.bonus) || undefined;
+      payload.bonus_frequency = incomeForm.bonus_frequency;
+      payload.commission = Number(incomeForm.commission) || undefined;
+      payload.commission_frequency = incomeForm.commission_frequency;
+      payload.overtime = Number(incomeForm.overtime) || undefined;
+      payload.overtime_frequency = incomeForm.overtime_frequency;
+      payload.overtime_guaranteed = incomeForm.overtime_guaranteed;
+      payload.annual_gross_total = computeSalaryAnnualTotal();
+    } else if (type === 'self_employed_sole' || type === 'self_employed_company') {
+      payload.business_name = incomeForm.business_name || undefined;
+      payload.tax_year = incomeForm.tax_year ? Number(incomeForm.tax_year) : undefined;
+      payload.gross_sales = Number(incomeForm.gross_sales) || undefined;
+      payload.profit_before_tax = Number(incomeForm.profit_before_tax) || undefined;
+      payload.depreciation = Number(incomeForm.depreciation) || undefined;
+      payload.interest_addbacks = Number(incomeForm.interest_addbacks) || undefined;
+      payload.non_recurring_expenses = Number(incomeForm.non_recurring_expenses) || undefined;
+      payload.tax_paid = Number(incomeForm.tax_paid) || undefined;
+      payload.net_profit = computeSelfEmployedNetProfit();
+      payload.previous_tax_year = incomeForm.previous_tax_year ? Number(incomeForm.previous_tax_year) : undefined;
+      payload.prev_gross_sales = Number(incomeForm.prev_gross_sales) || undefined;
+      payload.prev_profit_before_tax = Number(incomeForm.prev_profit_before_tax) || undefined;
+      payload.prev_depreciation = Number(incomeForm.prev_depreciation) || undefined;
+      payload.prev_tax_paid = Number(incomeForm.prev_tax_paid) || undefined;
+    } else if (type === 'rental') {
+      payload.rental_property_address = incomeForm.rental_property_address || undefined;
+      payload.rental_gross_monthly = Number(incomeForm.rental_gross_monthly) || undefined;
+      payload.rental_ownership_percent = Number(incomeForm.rental_ownership_percent) || 100;
+    } else if (type === 'other') {
+      payload.other_income_description = incomeForm.other_income_description || undefined;
+      payload.other_income_amount = Number(incomeForm.other_income_amount) || undefined;
+      payload.other_income_frequency = incomeForm.other_income_frequency;
+    }
+    return payload;
+  };
+
+  const handleSaveIncomeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!incomeForm.income_type) {
+      setIncomeFormError('Income type is required.');
+      return;
+    }
+    const applicant = incomeModalApplicant;
+    if (!applicant) return;
+    setSubmittingIncome(true);
+    setIncomeFormError(null);
+    try {
+      const payload = buildIncomePayload();
+      if (editingIncome) {
+        await applicationService.updateIncome(editingIncome.id, payload);
+        setToastMessage('Income updated');
+      } else {
+        await applicationService.createIncome(applicant.id, payload);
+        setToastMessage('Income added');
+      }
+      setShowAddIncomeModal(false);
+      setIncomeModalApplicant(null);
+      setEditingIncome(null);
+      setIncomeForm(emptyIncomeForm());
+      const updated = await applicationService.getIncome(applicant.id);
+      setIncomeByApplicantId((prev) => ({ ...prev, [applicant.id]: updated || [] }));
+    } catch (err) {
+      const msg = err && typeof err === 'object' && 'message' in err ? String((err as { message?: string }).message) : err instanceof Error ? err.message : 'Failed to save income.';
+      setIncomeFormError(msg);
+    } finally {
+      setSubmittingIncome(false);
+    }
+  };
+
+  const handleDeleteIncome = async (applicantId: string, incomeId: string) => {
+    if (!window.confirm('Are you sure you want to remove this income record?')) return;
+    try {
+      await applicationService.deleteIncome(incomeId);
+      const data = await applicationService.getIncome(applicantId);
+      setIncomeByApplicantId((prev) => ({ ...prev, [applicantId]: data || [] }));
+      setToastMessage('Income removed');
+    } catch (err) {
+      setToastMessage(err instanceof Error ? err.message : 'Failed to remove income');
     }
   };
 
@@ -1272,6 +1521,215 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
     );
   };
 
+  const getIncomeTypeLabel = (value: string) => INCOME_TYPES.find((t) => t.value === value)?.label ?? value;
+  const getIncomeCardSummary = (inc: Income) => {
+    const type = (inc.income_type as string) || '';
+    if (type === 'salary_wages') return { amount: inc.annual_gross_total, freq: 'Annually' };
+    if (type === 'self_employed_sole' || type === 'self_employed_company') return { amount: inc.net_profit, freq: 'Annually' };
+    if (type === 'rental') return { amount: inc.rental_gross_monthly, freq: 'Monthly' };
+    if (type === 'other') return { amount: inc.other_income_amount, freq: (inc.other_income_frequency as string) || '' };
+    return { amount: null, freq: '' };
+  };
+
+  const renderIncomeTab = () => {
+    if (applicantsLoading && activeTab === 'income') {
+      return (
+        <div className="flex justify-center items-center py-24">
+          <Icon name="Loader" className="h-10 w-10 animate-spin text-primary-500 dark:text-primary-400" />
+        </div>
+      );
+    }
+    if (applicants.length === 0) {
+      return (
+        <Card className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 py-12 text-center">
+          <p className="text-gray-500 dark:text-gray-400">Add applicants in the Applicants tab first, then you can add income for each.</p>
+        </Card>
+      );
+    }
+    if (incomeTabLoading) {
+      return (
+        <div className="flex justify-center items-center py-24">
+          <Icon name="Loader" className="h-10 w-10 animate-spin text-primary-500 dark:text-primary-400" />
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-8">
+        {applicants.map((applicant) => {
+          const incomes = incomeByApplicantId[applicant.id] || [];
+          return (
+            <div key={applicant.id}>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Income — {getApplicantDisplayName(applicant)}</h3>
+                <Button
+                  type="button"
+                  leftIcon="PlusCircle"
+                  onClick={() => {
+                    setIncomeModalApplicant(applicant);
+                    setEditingIncome(null);
+                    setIncomeForm(emptyIncomeForm());
+                    setIncomeFormError(null);
+                    setShowAddIncomeModal(true);
+                  }}
+                >
+                  Add Income
+                </Button>
+              </div>
+              {incomes.length === 0 ? (
+                <Card className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 py-8 text-center">
+                  <p className="text-gray-500 dark:text-gray-400 text-sm">No income records yet.</p>
+                </Card>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {incomes.map((inc) => {
+                    const { amount, freq } = getIncomeCardSummary(inc);
+                    return (
+                      <Card key={inc.id} className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 p-4">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="font-medium text-gray-900 dark:text-white">{getIncomeTypeLabel(inc.income_type as string)}</p>
+                            {(amount != null && amount !== '') && <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">${Number(amount).toLocaleString()} {freq && `· ${freq}`}</p>}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              leftIcon="Pencil"
+                              onClick={() => {
+                                setIncomeModalApplicant(applicant);
+                                setEditingIncome(inc);
+                                setIncomeForm(incomeToForm(inc));
+                                setIncomeFormError(null);
+                                setShowAddIncomeModal(true);
+                              }}
+                            >
+                              Edit
+                            </Button>
+                            <Button type="button" variant="ghost" size="sm" leftIcon="Trash2" onClick={() => handleDeleteIncome(applicant.id, inc.id)}>Delete</Button>
+                          </div>
+                        </div>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {/* Annual Income Summary */}
+        <Card className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 pb-2 border-b border-gray-200 dark:border-gray-700">Annual Income Summary</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left text-gray-700 dark:text-gray-300">
+              <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase bg-gray-50 dark:bg-gray-700/50">
+                <tr>
+                  <th scope="col" className="px-4 py-3">Applicant</th>
+                  <th scope="col" className="px-4 py-3 text-right">Total Annual Income</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                {applicants.map((a) => {
+                  const list = incomeByApplicantId[a.id] || [];
+                  const total = list.reduce((sum, inc) => sum + computeAnnualFromIncome(inc), 0);
+                  return (
+                    <tr key={a.id} className="bg-white dark:bg-gray-800">
+                      <td className="px-4 py-3 font-medium text-gray-900 dark:text-white">{getApplicantDisplayName(a)}</td>
+                      <td className="px-4 py-3 text-right">${total.toLocaleString()}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        {/* Add/Edit Income Modal */}
+        {showAddIncomeModal && incomeModalApplicant && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col border border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{editingIncome ? 'Edit Income' : 'Add Income'} — {getApplicantDisplayName(incomeModalApplicant)}</h3>
+                <button type="button" onClick={() => { setShowAddIncomeModal(false); setIncomeModalApplicant(null); setEditingIncome(null); setIncomeForm(emptyIncomeForm()); }} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                  <Icon name="X" className="h-5 w-5" />
+                </button>
+              </div>
+              <form onSubmit={handleSaveIncomeSubmit} className="flex flex-col min-h-0">
+                <div className="overflow-y-auto p-4 flex-1">
+                  {incomeFormError && <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-md mb-4">{incomeFormError}</p>}
+                  <div className="mb-4">
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Income Type *</label>
+                    <select value={incomeForm.income_type} onChange={(e) => setIncomeForm((f) => ({ ...f, income_type: e.target.value }))} className={inputClasses} required>
+                      <option value="">—</option>
+                      {INCOME_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                    </select>
+                  </div>
+
+                  {incomeForm.income_type === 'salary_wages' && (
+                    <FormSection title="Salary / Wages">
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Gross Salary</label><input type="number" min={0} step={0.01} value={incomeForm.gross_salary} onChange={e => setIncomeForm(f => ({ ...f, gross_salary: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Salary Frequency</label><select value={incomeForm.salary_frequency} onChange={e => setIncomeForm(f => ({ ...f, salary_frequency: e.target.value }))} className={inputClasses}>{FREQUENCIES.map(fq => <option key={fq} value={fq}>{fq}</option>)}</select></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Allowances</label><input type="number" min={0} step={0.01} value={incomeForm.allowances} onChange={e => setIncomeForm(f => ({ ...f, allowances: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Allowances Frequency</label><select value={incomeForm.allowances_frequency} onChange={e => setIncomeForm(f => ({ ...f, allowances_frequency: e.target.value }))} className={inputClasses}>{FREQUENCIES.map(fq => <option key={fq} value={fq}>{fq}</option>)}</select></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Bonus</label><input type="number" min={0} step={0.01} value={incomeForm.bonus} onChange={e => setIncomeForm(f => ({ ...f, bonus: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Bonus Frequency</label><select value={incomeForm.bonus_frequency} onChange={e => setIncomeForm(f => ({ ...f, bonus_frequency: e.target.value }))} className={inputClasses}>{FREQUENCIES.map(fq => <option key={fq} value={fq}>{fq}</option>)}</select></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Commission</label><input type="number" min={0} step={0.01} value={incomeForm.commission} onChange={e => setIncomeForm(f => ({ ...f, commission: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Commission Frequency</label><select value={incomeForm.commission_frequency} onChange={e => setIncomeForm(f => ({ ...f, commission_frequency: e.target.value }))} className={inputClasses}>{FREQUENCIES.map(fq => <option key={fq} value={fq}>{fq}</option>)}</select></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Overtime</label><input type="number" min={0} step={0.01} value={incomeForm.overtime} onChange={e => setIncomeForm(f => ({ ...f, overtime: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Overtime Frequency</label><select value={incomeForm.overtime_frequency} onChange={e => setIncomeForm(f => ({ ...f, overtime_frequency: e.target.value }))} className={inputClasses}>{FREQUENCIES.map(fq => <option key={fq} value={fq}>{fq}</option>)}</select></div>
+                      <div className="flex items-center gap-2 sm:col-span-2"><input type="checkbox" id="overtime_guaranteed" checked={incomeForm.overtime_guaranteed} onChange={e => setIncomeForm(f => ({ ...f, overtime_guaranteed: e.target.checked }))} className="rounded border-gray-300 text-primary-600 focus:ring-primary-500" /><label htmlFor="overtime_guaranteed" className="text-sm text-gray-700 dark:text-gray-300">Overtime Guaranteed</label></div>
+                      <div className="sm:col-span-2"><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Annual Gross Total</label><p className="py-2 text-sm font-medium text-gray-900 dark:text-white">${computeSalaryAnnualTotal().toLocaleString()}</p></div>
+                    </FormSection>
+                  )}
+
+                  {(incomeForm.income_type === 'self_employed_sole' || incomeForm.income_type === 'self_employed_company') && (
+                    <FormSection title="Self Employed">
+                      <div className="sm:col-span-2"><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Business Name</label><input type="text" value={incomeForm.business_name} onChange={e => setIncomeForm(f => ({ ...f, business_name: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Tax Year</label><input type="number" min={2000} max={2100} value={incomeForm.tax_year} onChange={e => setIncomeForm(f => ({ ...f, tax_year: e.target.value }))} className={inputClasses} placeholder="2024" /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Gross Sales</label><input type="number" min={0} step={0.01} value={incomeForm.gross_sales} onChange={e => setIncomeForm(f => ({ ...f, gross_sales: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Profit Before Tax</label><input type="number" step={0.01} value={incomeForm.profit_before_tax} onChange={e => setIncomeForm(f => ({ ...f, profit_before_tax: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Depreciation</label><input type="number" min={0} step={0.01} value={incomeForm.depreciation} onChange={e => setIncomeForm(f => ({ ...f, depreciation: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Interest Addbacks</label><input type="number" min={0} step={0.01} value={incomeForm.interest_addbacks} onChange={e => setIncomeForm(f => ({ ...f, interest_addbacks: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Non Recurring Expenses</label><input type="number" min={0} step={0.01} value={incomeForm.non_recurring_expenses} onChange={e => setIncomeForm(f => ({ ...f, non_recurring_expenses: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Tax Paid</label><input type="number" min={0} step={0.01} value={incomeForm.tax_paid} onChange={e => setIncomeForm(f => ({ ...f, tax_paid: e.target.value }))} className={inputClasses} /></div>
+                      <div className="sm:col-span-2"><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Net Profit (calculated)</label><p className="py-2 text-sm font-medium text-gray-900 dark:text-white">${computeSelfEmployedNetProfit().toLocaleString()}</p></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Previous Tax Year</label><input type="number" min={2000} max={2100} value={incomeForm.previous_tax_year} onChange={e => setIncomeForm(f => ({ ...f, previous_tax_year: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Prev Gross Sales</label><input type="number" min={0} step={0.01} value={incomeForm.prev_gross_sales} onChange={e => setIncomeForm(f => ({ ...f, prev_gross_sales: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Prev Profit Before Tax</label><input type="number" step={0.01} value={incomeForm.prev_profit_before_tax} onChange={e => setIncomeForm(f => ({ ...f, prev_profit_before_tax: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Prev Depreciation</label><input type="number" min={0} step={0.01} value={incomeForm.prev_depreciation} onChange={e => setIncomeForm(f => ({ ...f, prev_depreciation: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Prev Tax Paid</label><input type="number" min={0} step={0.01} value={incomeForm.prev_tax_paid} onChange={e => setIncomeForm(f => ({ ...f, prev_tax_paid: e.target.value }))} className={inputClasses} /></div>
+                    </FormSection>
+                  )}
+
+                  {incomeForm.income_type === 'rental' && (
+                    <FormSection title="Rental Income">
+                      <div className="sm:col-span-2"><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Rental Property Address</label><input type="text" value={incomeForm.rental_property_address} onChange={e => setIncomeForm(f => ({ ...f, rental_property_address: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Rental Gross Monthly</label><input type="number" min={0} step={0.01} value={incomeForm.rental_gross_monthly} onChange={e => setIncomeForm(f => ({ ...f, rental_gross_monthly: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Rental Ownership %</label><input type="number" min={0} max={100} value={incomeForm.rental_ownership_percent} onChange={e => setIncomeForm(f => ({ ...f, rental_ownership_percent: e.target.value }))} className={inputClasses} /></div>
+                    </FormSection>
+                  )}
+
+                  {incomeForm.income_type === 'other' && (
+                    <FormSection title="Other Income">
+                      <div className="sm:col-span-2"><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Description</label><input type="text" value={incomeForm.other_income_description} onChange={e => setIncomeForm(f => ({ ...f, other_income_description: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Amount</label><input type="number" min={0} step={0.01} value={incomeForm.other_income_amount} onChange={e => setIncomeForm(f => ({ ...f, other_income_amount: e.target.value }))} className={inputClasses} /></div>
+                      <div><label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Frequency</label><select value={incomeForm.other_income_frequency} onChange={e => setIncomeForm(f => ({ ...f, other_income_frequency: e.target.value }))} className={inputClasses}>{FREQUENCIES.map(fq => <option key={fq} value={fq}>{fq}</option>)}</select></div>
+                    </FormSection>
+                  )}
+                </div>
+                <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3 flex-shrink-0">
+                  <Button type="button" variant="secondary" onClick={() => { setShowAddIncomeModal(false); setIncomeModalApplicant(null); setEditingIncome(null); setIncomeForm(emptyIncomeForm()); }}>Cancel</Button>
+                  <Button type="submit" isLoading={submittingIncome}>{editingIncome ? 'Save changes' : 'Add Income'}</Button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderTabContent = () => {
     switch (activeTab) {
       case 'overview':
@@ -1279,7 +1737,7 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
       case 'applicants':
         return renderApplicantsTab();
       case 'income':
-        return <ComingSoonPlaceholder tabName="Income" />;
+        return renderIncomeTab();
       case 'expenses':
         return <ComingSoonPlaceholder tabName="Expenses" />;
       case 'assets':
