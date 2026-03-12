@@ -5,7 +5,7 @@ import type { BankRates, AIRecommendationResponse } from '../../types';
 import { Button } from '../common/Button';
 import { Icon, IconName } from '../common/Icon';
 import { Card } from '../common/Card';
-import { applicationService, type Applicant, type Company, type Income, type Expense, type Asset } from '../../services/applicationService';
+import { applicationService, type Applicant, type Company, type Income, type Expense, type Asset, type Liability } from '../../services/applicationService';
 import { crmService } from '../../services/api';
 import { geminiService } from '../../services/geminiService';
 
@@ -297,6 +297,24 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
         .then((data) => setAssets(data || []))
         .catch(() => setAssets([]))
         .finally(() => setAssetsLoading(false));
+    }
+  }, [activeTab, application.id]);
+
+  const [liabilities, setLiabilities] = useState<Liability[]>([]);
+  const [liabilitiesLoading, setLiabilitiesLoading] = useState(false);
+  const [showLiabilityModal, setShowLiabilityModal] = useState(false);
+  const [editingLiability, setEditingLiability] = useState<Liability | null>(null);
+  const [liabilityFormError, setLiabilityFormError] = useState<string | null>(null);
+  const [submittingLiability, setSubmittingLiability] = useState(false);
+
+  useEffect(() => {
+    if (activeTab === 'liabilities' && application.id) {
+      setLiabilitiesLoading(true);
+      applicationService
+        .getLiabilities(application.id)
+        .then((data) => setLiabilities(data || []))
+        .catch(() => setLiabilities([]))
+        .finally(() => setLiabilitiesLoading(false));
     }
   }, [activeTab, application.id]);
 
@@ -614,6 +632,27 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
   });
 
   const [assetForm, setAssetForm] = useState(emptyAssetForm());
+
+  const emptyLiabilityForm = () => ({
+    liability_type: 'Mortgage' as 'Mortgage' | 'Credit Card' | 'Personal Loan' | 'Vehicle Loan' | 'Student Loan' | 'Tax Debt' | 'Other',
+    lender: '',
+    account_number: '',
+    original_limit: '',
+    current_balance: '',
+    interest_rate: '',
+    repayment_amount: '',
+    repayment_frequency: 'Monthly',
+    repayment_type: '',
+    loan_term_end_date: '',
+    fixed_rate_expiry: '',
+    mortgage_type: '',
+    linked_asset_id: '',
+    to_be_refinanced: false,
+    to_be_paid_out: false,
+    card_type: '',
+  });
+
+  const [liabilityForm, setLiabilityForm] = useState(emptyLiabilityForm());
 
   const resetApplicantForm = () => {
     setApplicantForm(emptyApplicantForm());
@@ -977,6 +1016,61 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
     return payload;
   };
 
+  const liabilityMonthlyFrom = (amount: number, freq: string): number => {
+    switch (freq) {
+      case 'Weekly':
+        return (amount * 52) / 12;
+      case 'Fortnightly':
+        return (amount * 26) / 12;
+      case 'Monthly':
+      default:
+        return amount;
+    }
+  };
+
+  const buildLiabilityPayload = (): Partial<Liability> => {
+    const t = liabilityForm.liability_type;
+    const payload: Partial<Liability> & Record<string, unknown> = {
+      liability_type: t,
+    };
+
+    const num = (v: string) => (v === '' ? undefined : Number(v) || 0);
+
+    payload.lender = liabilityForm.lender || undefined;
+    payload.account_number = liabilityForm.account_number || undefined;
+    payload.current_balance = num(liabilityForm.current_balance);
+
+    if (t === 'Mortgage' || t === 'Personal Loan' || t === 'Vehicle Loan' || t === 'Student Loan' || t === 'Tax Debt' || t === 'Other') {
+      payload.original_limit = num(liabilityForm.original_limit);
+      payload.interest_rate = num(liabilityForm.interest_rate);
+      payload.repayment_amount = num(liabilityForm.repayment_amount);
+      payload.repayment_frequency = liabilityForm.repayment_frequency;
+      payload.repayment_type = t === 'Mortgage' ? liabilityForm.repayment_type || undefined : undefined;
+      payload.loan_term_end_date = liabilityForm.loan_term_end_date || undefined;
+      if (t === 'Mortgage') {
+        payload.fixed_rate_expiry = liabilityForm.fixed_rate_expiry || undefined;
+        payload.mortgage_type = liabilityForm.mortgage_type || undefined;
+        payload.linked_asset_id = liabilityForm.linked_asset_id || undefined;
+      }
+      if (t === 'Vehicle Loan') {
+        payload.linked_asset_id = liabilityForm.linked_asset_id || undefined;
+      }
+    } else if (t === 'Credit Card') {
+      payload.card_type = liabilityForm.card_type || undefined;
+      payload.card_limit = num(liabilityForm.original_limit);
+      payload.current_balance = num(liabilityForm.current_balance);
+    }
+
+    payload.to_be_paid_out = liabilityForm.to_be_paid_out;
+    payload.to_be_refinanced = liabilityForm.to_be_refinanced;
+
+    // Derived monthly repayment
+    const repay = num(liabilityForm.repayment_amount) || 0;
+    payload.monthly_repayment = liabilityMonthlyFrom(repay, liabilityForm.repayment_frequency);
+
+    return payload;
+  };
+
 
   const buildIncomePayload = (): Partial<Income> => {
     const type = incomeForm.income_type;
@@ -1157,6 +1251,53 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
       setToastMessage('Asset removed');
     } catch (err) {
       setToastMessage(err instanceof Error ? err.message : 'Failed to remove asset');
+    }
+  };
+
+  const handleSaveLiabilitySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!liabilityForm.liability_type) {
+      setLiabilityFormError('Liability type is required.');
+      return;
+    }
+    setSubmittingLiability(true);
+    setLiabilityFormError(null);
+    try {
+      const payload = buildLiabilityPayload();
+      if (editingLiability) {
+        await applicationService.updateLiability(editingLiability.id, payload);
+        setToastMessage('Liability updated');
+      } else {
+        await applicationService.createLiability(application.id, payload);
+        setToastMessage('Liability added');
+      }
+      setShowLiabilityModal(false);
+      setEditingLiability(null);
+      setLiabilityForm(emptyLiabilityForm());
+      const data = await applicationService.getLiabilities(application.id);
+      setLiabilities(data || []);
+    } catch (err) {
+      const msg =
+        err && typeof err === 'object' && 'message' in err
+          ? String((err as { message?: string }).message)
+          : err instanceof Error
+            ? err.message
+            : 'Failed to save liability.';
+      setLiabilityFormError(msg);
+    } finally {
+      setSubmittingLiability(false);
+    }
+  };
+
+  const handleDeleteLiability = async (id: string) => {
+    if (!window.confirm('Are you sure you want to remove this liability?')) return;
+    try {
+      await applicationService.deleteLiability(id);
+      const data = await applicationService.getLiabilities(application.id);
+      setLiabilities(data || []);
+      setToastMessage('Liability removed');
+    } catch (err) {
+      setToastMessage(err instanceof Error ? err.message : 'Failed to remove liability');
     }
   };
 
@@ -3557,6 +3698,746 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
     );
   };
 
+  const getLiabilityIcon = (type: string): IconName => {
+    switch (type) {
+      case 'Mortgage':
+        return 'Landmark';
+      case 'Credit Card':
+        return 'CreditCard';
+      case 'Vehicle Loan':
+        return 'Car' as IconName;
+      case 'Student Loan':
+        return 'BookKey';
+      case 'Tax Debt':
+        return 'Scale';
+      case 'Personal Loan':
+      case 'Other':
+      default:
+        return 'DollarSign';
+    }
+  };
+
+  const getLiabilityMonthlyRepayment = (l: Liability): number => {
+    const amt = Number((l as any).repayment_amount) || 0;
+    const freq = ((l as any).repayment_frequency as string) || 'Monthly';
+    return liabilityMonthlyFrom(amt, freq);
+  };
+
+  const liabilityToForm = (l: Liability) => ({
+    ...emptyLiabilityForm(),
+    liability_type: (l.liability_type as any) || 'Mortgage',
+    lender: (l.lender as string) || '',
+    account_number: (l as any).account_number || '',
+    original_limit: (l as any).original_limit != null ? String((l as any).original_limit) : '',
+    current_balance: (l.current_balance != null ? String(l.current_balance) : '') || '',
+    interest_rate: (l as any).interest_rate != null ? String((l as any).interest_rate) : '',
+    repayment_amount: (l as any).repayment_amount != null ? String((l as any).repayment_amount) : '',
+    repayment_frequency: ((l as any).repayment_frequency as string) || 'Monthly',
+    repayment_type: (l as any).repayment_type || '',
+    loan_term_end_date: (l as any).loan_term_end_date || '',
+    fixed_rate_expiry: (l as any).fixed_rate_expiry || '',
+    mortgage_type: (l as any).mortgage_type || '',
+    linked_asset_id: (l as any).linked_asset_id || '',
+    to_be_refinanced: Boolean((l as any).to_be_refinanced),
+    to_be_paid_out: Boolean((l as any).to_be_paid_out),
+    card_type: (l as any).card_type || '',
+  });
+
+  const renderLiabilitiesTab = () => {
+    if (liabilitiesLoading) {
+      return (
+        <div className="flex justify-center items-center py-24">
+          <Icon name="Loader" className="h-10 w-10 animate-spin text-primary-500 dark:text-primary-400" />
+        </div>
+      );
+    }
+
+    const totalBalance = liabilities.reduce((sum, l) => sum + (Number((l.current_balance as number) || 0)), 0);
+    const totalMonthly = liabilities.reduce((sum, l) => sum + getLiabilityMonthlyRepayment(l), 0);
+
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Liabilities</h3>
+          <Button
+            leftIcon="PlusCircle"
+            type="button"
+            onClick={() => {
+              setEditingLiability(null);
+              setLiabilityForm(emptyLiabilityForm());
+              setLiabilityFormError(null);
+              setShowLiabilityModal(true);
+            }}
+          >
+            Add Liability
+          </Button>
+        </div>
+
+        {liabilities.length === 0 ? (
+          <Card className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 py-12 text-center">
+            <p className="text-gray-500 dark:text-gray-400">
+              No liabilities recorded yet. Click &quot;Add Liability&quot; to add one.
+            </p>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {liabilities.map((l) => (
+              <Card
+                key={l.id}
+                className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 p-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <div className="rounded-full bg-primary-50 dark:bg-primary-900/30 p-2">
+                      <Icon
+                        name={getLiabilityIcon(l.liability_type)}
+                        className="h-4 w-4 text-primary-600 dark:text-primary-300"
+                      />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900 dark:text-white">
+                        {l.liability_type || 'Liability'}
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                        {l.lender || '—'}
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                        Balance: ${Number((l.current_balance as number) || 0).toLocaleString()}
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Monthly repayment: ${getLiabilityMonthlyRepayment(l).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      leftIcon="Pencil"
+                      onClick={() => {
+                        setEditingLiability(l);
+                        setLiabilityForm(liabilityToForm(l));
+                        setLiabilityFormError(null);
+                        setShowLiabilityModal(true);
+                      }}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      leftIcon="Trash2"
+                      onClick={() => handleDeleteLiability(l.id)}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+
+        <Card className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-gray-900 dark:text-white">Total Liabilities</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                Total balance and monthly repayments across all liabilities.
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-gray-500 dark:text-gray-400">Total Balance</p>
+              <p className="text-sm font-semibold text-gray-900 dark:text-white">
+                ${totalBalance.toLocaleString()}
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Total Monthly Repayments</p>
+              <p className="text-sm font-semibold text-gray-900 dark:text-white">
+                ${totalMonthly.toLocaleString()}
+              </p>
+            </div>
+          </div>
+        </Card>
+
+        {showLiabilityModal && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col border border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  {editingLiability ? 'Edit Liability' : 'Add Liability'}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowLiabilityModal(false);
+                    setEditingLiability(null);
+                    setLiabilityForm(emptyLiabilityForm());
+                    setLiabilityFormError(null);
+                  }}
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                >
+                  <Icon name="X" className="h-5 w-5" />
+                </button>
+              </div>
+              <form onSubmit={handleSaveLiabilitySubmit} className="flex flex-col min-h-0">
+                <div className="overflow-y-auto p-4 flex-1 space-y-4">
+                  {liabilityFormError && (
+                    <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-md">
+                      {liabilityFormError}
+                    </p>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                      Liability Type
+                    </label>
+                    <select
+                      value={liabilityForm.liability_type}
+                      onChange={(e) =>
+                        setLiabilityForm((f) => ({ ...f, liability_type: e.target.value as typeof f.liability_type }))
+                      }
+                      className={inputClasses}
+                    >
+                      <option value="Mortgage">Mortgage</option>
+                      <option value="Credit Card">Credit Card</option>
+                      <option value="Personal Loan">Personal Loan</option>
+                      <option value="Vehicle Loan">Vehicle Loan</option>
+                      <option value="Student Loan">Student Loan</option>
+                      <option value="Tax Debt">Tax Debt</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+
+                  {liabilityForm.liability_type === 'Mortgage' && (
+                    <FormSection title="Mortgage Details">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Lender
+                        </label>
+                        <input
+                          type="text"
+                          value={liabilityForm.lender}
+                          onChange={(e) => setLiabilityForm((f) => ({ ...f, lender: e.target.value }))}
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Account Number
+                        </label>
+                        <input
+                          type="text"
+                          value={liabilityForm.account_number}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, account_number: e.target.value }))
+                          }
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Original Limit
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={liabilityForm.original_limit}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, original_limit: e.target.value }))
+                          }
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Current Balance
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={liabilityForm.current_balance}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, current_balance: e.target.value }))
+                          }
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Interest Rate (%)
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.01}
+                          value={liabilityForm.interest_rate}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, interest_rate: e.target.value }))
+                          }
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Repayment Amount
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={liabilityForm.repayment_amount}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, repayment_amount: e.target.value }))
+                          }
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Repayment Frequency
+                        </label>
+                        <select
+                          value={liabilityForm.repayment_frequency}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, repayment_frequency: e.target.value }))
+                          }
+                          className={inputClasses}
+                        >
+                          {FREQUENCIES.filter((f) => f !== 'Annually').map((fq) => (
+                            <option key={fq} value={fq}>
+                              {fq}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Repayment Type
+                        </label>
+                        <select
+                          value={liabilityForm.repayment_type}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, repayment_type: e.target.value }))
+                          }
+                          className={inputClasses}
+                        >
+                          <option value="">—</option>
+                          <option>Principal &amp; Interest</option>
+                          <option>Interest Only</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Loan Term End Date
+                        </label>
+                        <input
+                          type="date"
+                          value={liabilityForm.loan_term_end_date}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, loan_term_end_date: e.target.value }))
+                          }
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Fixed Rate Expiry
+                        </label>
+                        <input
+                          type="date"
+                          value={liabilityForm.fixed_rate_expiry}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, fixed_rate_expiry: e.target.value }))
+                          }
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Mortgage Type
+                        </label>
+                        <select
+                          value={liabilityForm.mortgage_type}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, mortgage_type: e.target.value }))
+                          }
+                          className={inputClasses}
+                        >
+                          <option value="">—</option>
+                          <option>Owner Occupied</option>
+                          <option>Investment</option>
+                          <option>Construction</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Linked Asset
+                        </label>
+                        <select
+                          value={liabilityForm.linked_asset_id}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, linked_asset_id: e.target.value }))
+                          }
+                          className={inputClasses}
+                        >
+                          <option value="">—</option>
+                          {assets
+                            .filter((a) => a.asset_type === 'Property')
+                            .map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {(a as any).property_address || 'Property'}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="mortgage_to_be_refinanced"
+                          checked={liabilityForm.to_be_refinanced}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, to_be_refinanced: e.target.checked }))
+                          }
+                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        <label
+                          htmlFor="mortgage_to_be_refinanced"
+                          className="text-sm text-gray-700 dark:text-gray-300"
+                        >
+                          To Be Refinanced
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="mortgage_to_be_paid_out"
+                          checked={liabilityForm.to_be_paid_out}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, to_be_paid_out: e.target.checked }))
+                          }
+                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        <label
+                          htmlFor="mortgage_to_be_paid_out"
+                          className="text-sm text-gray-700 dark:text-gray-300"
+                        >
+                          To Be Paid Out
+                        </label>
+                      </div>
+                    </FormSection>
+                  )}
+
+                  {liabilityForm.liability_type === 'Credit Card' && (
+                    <FormSection title="Credit Card">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Lender
+                        </label>
+                        <input
+                          type="text"
+                          value={liabilityForm.lender}
+                          onChange={(e) => setLiabilityForm((f) => ({ ...f, lender: e.target.value }))}
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Card Type
+                        </label>
+                        <select
+                          value={liabilityForm.card_type}
+                          onChange={(e) => setLiabilityForm((f) => ({ ...f, card_type: e.target.value }))}
+                          className={inputClasses}
+                        >
+                          <option value="">—</option>
+                          <option>Visa</option>
+                          <option>Mastercard</option>
+                          <option>Amex</option>
+                          <option>Other</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Account Number
+                        </label>
+                        <input
+                          type="text"
+                          value={liabilityForm.account_number}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, account_number: e.target.value }))
+                          }
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Card Limit
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={liabilityForm.original_limit}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, original_limit: e.target.value }))
+                          }
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Current Balance
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={liabilityForm.current_balance}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, current_balance: e.target.value }))
+                          }
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="cc_to_be_paid_out"
+                          checked={liabilityForm.to_be_paid_out}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, to_be_paid_out: e.target.checked }))
+                          }
+                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        <label
+                          htmlFor="cc_to_be_paid_out"
+                          className="text-sm text-gray-700 dark:text-gray-300"
+                        >
+                          To Be Paid Out
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="cc_to_be_refinanced"
+                          checked={liabilityForm.to_be_refinanced}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, to_be_refinanced: e.target.checked }))
+                          }
+                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        <label
+                          htmlFor="cc_to_be_refinanced"
+                          className="text-sm text-gray-700 dark:text-gray-300"
+                        >
+                          To Be Refinanced
+                        </label>
+                      </div>
+                    </FormSection>
+                  )}
+
+                  {(liabilityForm.liability_type === 'Personal Loan' ||
+                    liabilityForm.liability_type === 'Vehicle Loan' ||
+                    liabilityForm.liability_type === 'Student Loan' ||
+                    liabilityForm.liability_type === 'Tax Debt' ||
+                    liabilityForm.liability_type === 'Other') && (
+                    <FormSection title="Loan Details">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Lender
+                        </label>
+                        <input
+                          type="text"
+                          value={liabilityForm.lender}
+                          onChange={(e) => setLiabilityForm((f) => ({ ...f, lender: e.target.value }))}
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Account Number
+                        </label>
+                        <input
+                          type="text"
+                          value={liabilityForm.account_number}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, account_number: e.target.value }))
+                          }
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Original Limit
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={liabilityForm.original_limit}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, original_limit: e.target.value }))
+                          }
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Current Balance
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={liabilityForm.current_balance}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, current_balance: e.target.value }))
+                          }
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Interest Rate (%)
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.01}
+                          value={liabilityForm.interest_rate}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, interest_rate: e.target.value }))
+                          }
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Repayment Amount
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={liabilityForm.repayment_amount}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, repayment_amount: e.target.value }))
+                          }
+                          className={inputClasses}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Repayment Frequency
+                        </label>
+                        <select
+                          value={liabilityForm.repayment_frequency}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, repayment_frequency: e.target.value }))
+                          }
+                          className={inputClasses}
+                        >
+                          {FREQUENCIES.filter((f) => f !== 'Annually').map((fq) => (
+                            <option key={fq} value={fq}>
+                              {fq}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Loan Term End Date
+                        </label>
+                        <input
+                          type="date"
+                          value={liabilityForm.loan_term_end_date}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, loan_term_end_date: e.target.value }))
+                          }
+                          className={inputClasses}
+                        />
+                      </div>
+                      {liabilityForm.liability_type === 'Vehicle Loan' && (
+                        <div>
+                          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                            Linked Asset
+                          </label>
+                          <select
+                            value={liabilityForm.linked_asset_id}
+                            onChange={(e) =>
+                              setLiabilityForm((f) => ({ ...f, linked_asset_id: e.target.value }))
+                            }
+                            className={inputClasses}
+                          >
+                            <option value="">—</option>
+                            {assets
+                              .filter((a) => a.asset_type === 'Vehicle')
+                              .map((a) => (
+                                <option key={a.id} value={a.id}>
+                                  {(a as any).vehicle_make || 'Vehicle'}
+                                </option>
+                              ))}
+                          </select>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="loan_to_be_paid_out"
+                          checked={liabilityForm.to_be_paid_out}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, to_be_paid_out: e.target.checked }))
+                          }
+                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        <label
+                          htmlFor="loan_to_be_paid_out"
+                          className="text-sm text-gray-700 dark:text-gray-300"
+                        >
+                          To Be Paid Out
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="loan_to_be_refinanced"
+                          checked={liabilityForm.to_be_refinanced}
+                          onChange={(e) =>
+                            setLiabilityForm((f) => ({ ...f, to_be_refinanced: e.target.checked }))
+                          }
+                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        <label
+                          htmlFor="loan_to_be_refinanced"
+                          className="text-sm text-gray-700 dark:text-gray-300"
+                        >
+                          To Be Refinanced
+                        </label>
+                      </div>
+                    </FormSection>
+                  )}
+                </div>
+                <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3 flex-shrink-0">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      setShowLiabilityModal(false);
+                      setEditingLiability(null);
+                      setLiabilityForm(emptyLiabilityForm());
+                      setLiabilityFormError(null);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button type="submit" isLoading={submittingLiability}>
+                    {editingLiability ? 'Save changes' : 'Add Liability'}
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderTabContent = () => {
     switch (activeTab) {
       case 'overview':
@@ -3570,7 +4451,7 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
       case 'assets':
         return renderAssetsTab();
       case 'liabilities':
-        return <ComingSoonPlaceholder tabName="Liabilities" />;
+        return renderLiabilitiesTab();
       case 'documents':
         return <ComingSoonPlaceholder tabName="Documents" />;
       default:
