@@ -1,13 +1,59 @@
 import React, { useState, useEffect } from 'react';
-import { crmService } from '../../services/api';
+import { crmService, getCurrentFirm } from '../../services/api';
+import { applicationService } from '../../services/applicationService';
 import type { Application, Client } from '../../types';
 import { ApplicationStatus } from '../../types';
-import { APPLICATION_STATUS_COLUMNS } from '../../constants';
-import { Card } from '../common/Card';
+import { APPLICATION_STATUS_COLUMNS, APPLICATION_STATUS_TO_WORKFLOW } from '../../constants';
 import { Icon, IconName } from '../common/Icon';
 import { Button } from '../common/Button';
 import { ApplicationDetailPage } from './ApplicationDetailPage';
 import LoanApplicationForm from './LoanApplicationForm';
+
+type SupabaseApplicationRow = {
+  id: string;
+  firm_id: string;
+  client_id: string;
+  assigned_to?: string;
+  reference_number?: string;
+  application_type?: string;
+  loan_amount?: number;
+  workflow_stage?: string;
+  status?: string;
+  lender_name?: string;
+  settlement_date?: string;
+  updated_at?: string;
+  created_at?: string;
+  clients?: { first_name?: string; last_name?: string; email?: string } | null;
+};
+
+function mapRowToApplication(row: SupabaseApplicationRow): Application {
+  const workflowToStatus: Record<string, ApplicationStatus> = {
+    draft: ApplicationStatus.Draft,
+    submitted: ApplicationStatus.ApplicationSubmitted,
+    conditional: ApplicationStatus.ConditionalApproval,
+    unconditional: ApplicationStatus.UnconditionalApproval,
+    settled: ApplicationStatus.Settled,
+    declined: ApplicationStatus.Declined,
+  };
+  const clientName = row.clients
+    ? [row.clients.first_name, row.clients.last_name].filter(Boolean).join(' ').trim() || 'Unknown'
+    : 'Unknown';
+  return {
+    id: row.id,
+    firmId: row.firm_id,
+    referenceNumber: row.reference_number || '',
+    clientName,
+    clientId: row.client_id,
+    advisorId: row.assigned_to || '',
+    lender: row.lender_name || 'N/A',
+    loanAmount: Number(row.loan_amount) || 0,
+    status: workflowToStatus[row.workflow_stage || 'draft'] ?? ApplicationStatus.Draft,
+    estSettlementDate: row.settlement_date ? new Date(row.settlement_date).toISOString().slice(0, 10) : '',
+    status_detail: row.status === 'active' ? 'Active' : 'Needs Attention',
+    lastUpdated: row.updated_at || row.created_at || '',
+    updatedByName: '',
+  };
+}
 
 const RiskBadge: React.FC<{ risk: Application['riskLevel'] }> = ({ risk }) => {
     if (!risk) return null;
@@ -81,26 +127,37 @@ const ApplicationTracker: React.FC = () => {
   const [dragOverStatus, setDragOverStatus] = useState<ApplicationStatus | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
 
-  // Add Application flow
-  const [showClientPicker, setShowClientPicker] = useState(false);
-  const [clientSearch, setClientSearch] = useState('');
-  const [pickedClient, setPickedClient] = useState<Client | null>(null);
-  const [isCreatingDraft, setIsCreatingDraft] = useState(false);
+  // New Application modal
+  const [showNewAppModal, setShowNewAppModal] = useState(false);
+  const [newAppClientId, setNewAppClientId] = useState('');
+  const [newAppApplicationType, setNewAppApplicationType] = useState<'purchase' | 'refinance' | 'top-up'>('purchase');
+  const [newAppLoanPurpose, setNewAppLoanPurpose] = useState('');
+  const [newAppLoanAmount, setNewAppLoanAmount] = useState<string>('');
+  const [isSubmittingNewApp, setIsSubmittingNewApp] = useState(false);
+  const [newAppError, setNewAppError] = useState<string | null>(null);
   const [newDraft, setNewDraft] = useState<{ application: Application; client: Client } | null>(null);
 
   const fetchData = () => {
+    const firm = getCurrentFirm();
+    if (!firm?.id) {
+      setApplications([]);
+      setClients([]);
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
     Promise.all([
-      crmService.getApplications(),
-      crmService.getClients()
-    ]).then(([appsData, clientsData]) => {
-      setApplications(appsData);
-      setClients(clientsData);
-      setIsLoading(false);
-    }).catch(error => {
-        console.error("Failed to fetch data:", error);
-        setIsLoading(false);
-    });
+      applicationService.getApplications(firm.id).then(rows => (rows || []).map(mapRowToApplication)),
+      crmService.getClients(),
+    ])
+      .then(([appsData, clientsData]) => {
+        setApplications(appsData);
+        setClients(clientsData);
+      })
+      .catch(error => {
+        console.error('Failed to fetch data:', error);
+      })
+      .finally(() => setIsLoading(false));
   };
 
   useEffect(() => {
@@ -131,35 +188,38 @@ const ApplicationTracker: React.FC = () => {
     setSelectedClient(null);
   };
 
-  const handleStartNewApplication = async () => {
-    if (!pickedClient) return;
-    setIsCreatingDraft(true);
+  const handleCreateApplication = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const firm = getCurrentFirm();
+    if (!firm?.id) {
+      setNewAppError('No firm session. Please log in again.');
+      return;
+    }
+    if (!newAppClientId.trim()) {
+      setNewAppError('Please select a client.');
+      return;
+    }
+    setIsSubmittingNewApp(true);
+    setNewAppError(null);
     try {
-      const draft = await crmService.createDraftApplication(pickedClient.id, pickedClient.name);
-      const placeholderApp: Application = {
-        id: draft.id,
-        firmId: '',
-        referenceNumber: draft.referenceNumber,
-        clientName: pickedClient.name,
-        clientId: pickedClient.id,
-        advisorId: '',
-        lender: '',
-        loanAmount: 0,
-        status: ApplicationStatus.Draft,
-        estSettlementDate: '',
-        status_detail: 'Active',
-        lastUpdated: new Date().toISOString(),
-        updatedByName: '',
-      };
-      setShowClientPicker(false);
-      setPickedClient(null);
-      setClientSearch('');
-      setNewDraft({ application: placeholderApp, client: pickedClient });
+      await applicationService.createApplication({
+        firm_id: firm.id,
+        client_id: newAppClientId,
+        application_type: newAppApplicationType,
+        loan_purpose: newAppLoanPurpose.trim() || undefined,
+        loan_amount: newAppLoanAmount ? Number(newAppLoanAmount) : undefined,
+      });
+      setShowNewAppModal(false);
+      setNewAppClientId('');
+      setNewAppApplicationType('purchase');
+      setNewAppLoanPurpose('');
+      setNewAppLoanAmount('');
+      fetchData();
     } catch (err) {
       console.error('Failed to create application:', err);
-      alert('Could not create application. Please try again.');
+      setNewAppError(err instanceof Error ? err.message : 'Could not create application. Please try again.');
     } finally {
-      setIsCreatingDraft(false);
+      setIsSubmittingNewApp(false);
     }
   };
 
@@ -192,8 +252,9 @@ const ApplicationTracker: React.FC = () => {
     if (!applicationId || sourceStatus === targetStatus) return;
     setDraggingId(null);
     setIsUpdating(true);
+    const stage = APPLICATION_STATUS_TO_WORKFLOW[targetStatus] as 'draft' | 'submitted' | 'conditional' | 'unconditional' | 'settled' | 'declined';
     try {
-      await crmService.updateApplicationWorkflowStage(applicationId, targetStatus);
+      await applicationService.updateWorkflowStage(applicationId, stage);
       setApplications(prev =>
         prev.map(app =>
           app.id === applicationId ? { ...app, status: targetStatus } : app
@@ -256,11 +317,6 @@ const ApplicationTracker: React.FC = () => {
     );
   }
 
-  const filteredClients = clients.filter(c =>
-    c.name.toLowerCase().includes(clientSearch.toLowerCase()) ||
-    c.email.toLowerCase().includes(clientSearch.toLowerCase())
-  );
-
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
@@ -279,7 +335,7 @@ const ApplicationTracker: React.FC = () => {
                     List
                 </button>
             </div>
-            <Button leftIcon="PlusCircle" onClick={() => setShowClientPicker(true)}>Add Application</Button>
+            <Button leftIcon="PlusCircle" onClick={() => setShowNewAppModal(true)}>New Application</Button>
         </div>
       </div>
 
@@ -355,63 +411,75 @@ const ApplicationTracker: React.FC = () => {
         </>
       )}
 
-      {/* Client Picker Modal */}
-      {showClientPicker && (
+      {/* New Application Modal */}
+      {showNewAppModal && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md flex flex-col max-h-[80vh]">
-            <div className="flex items-center justify-between p-5 border-b dark:border-gray-700">
-              <h3 className="text-lg font-semibold">Select Client</h3>
-              <button onClick={() => { setShowClientPicker(false); setPickedClient(null); setClientSearch(''); }} className="text-gray-400 hover:text-gray-600">
-                <Icon name="X" className="h-5 w-5" />
-              </button>
-            </div>
-            <div className="p-4">
-              <div className="relative">
-                <Icon name="Search" className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Search clients..."
-                  value={clientSearch}
-                  onChange={e => setClientSearch(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 text-sm rounded-md border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50 focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  autoFocus
-                />
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md">
+            <form onSubmit={handleCreateApplication}>
+              <div className="flex items-center justify-between p-5 border-b dark:border-gray-700">
+                <h3 className="text-lg font-semibold">New Application</h3>
+                <button type="button" onClick={() => { setShowNewAppModal(false); setNewAppError(null); }} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                  <Icon name="X" className="h-5 w-5" />
+                </button>
               </div>
-            </div>
-            <ul className="overflow-y-auto flex-1 px-4 pb-2 space-y-1">
-              {filteredClients.length === 0 && (
-                <li className="text-sm text-gray-500 text-center py-6">No clients found.</li>
-              )}
-              {filteredClients.map(client => (
-                <li key={client.id}>
-                  <button
-                    onClick={() => setPickedClient(client)}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${
-                      pickedClient?.id === client.id
-                        ? 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300'
-                        : 'hover:bg-gray-100 dark:hover:bg-gray-700'
-                    }`}
+              <div className="p-5 space-y-4">
+                {newAppError && (
+                  <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-md">{newAppError}</p>
+                )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Client</label>
+                  <select
+                    value={newAppClientId}
+                    onChange={e => setNewAppClientId(e.target.value)}
+                    className="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    required
                   >
-                    <img src={client.avatarUrl} alt={client.name} className="h-8 w-8 rounded-full flex-shrink-0" />
-                    <div>
-                      <p className="text-sm font-medium">{client.name}</p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">{client.email}</p>
-                    </div>
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <div className="p-4 border-t dark:border-gray-700 flex justify-end gap-3">
-              <Button variant="secondary" onClick={() => { setShowClientPicker(false); setPickedClient(null); setClientSearch(''); }}>Cancel</Button>
-              <Button
-                onClick={handleStartNewApplication}
-                disabled={!pickedClient}
-                isLoading={isCreatingDraft}
-                leftIcon="PlusCircle"
-              >
-                Start Application
-              </Button>
-            </div>
+                    <option value="">Select a client</option>
+                    {clients.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Application type</label>
+                  <select
+                    value={newAppApplicationType}
+                    onChange={e => setNewAppApplicationType(e.target.value as 'purchase' | 'refinance' | 'top-up')}
+                    className="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  >
+                    <option value="purchase">Purchase</option>
+                    <option value="refinance">Refinance</option>
+                    <option value="top-up">Top-up</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Loan purpose</label>
+                  <input
+                    type="text"
+                    value={newAppLoanPurpose}
+                    onChange={e => setNewAppLoanPurpose(e.target.value)}
+                    placeholder="e.g. First home"
+                    className="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Loan amount</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1000}
+                    value={newAppLoanAmount}
+                    onChange={e => setNewAppLoanAmount(e.target.value)}
+                    placeholder="e.g. 500000"
+                    className="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+              <div className="p-5 border-t dark:border-gray-700 flex justify-end gap-3">
+                <Button type="button" variant="secondary" onClick={() => { setShowNewAppModal(false); setNewAppError(null); }}>Cancel</Button>
+                <Button type="submit" isLoading={isSubmittingNewApp} leftIcon="PlusCircle">Create Application</Button>
+              </div>
+            </form>
           </div>
         </div>
       )}

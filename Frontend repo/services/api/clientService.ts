@@ -4,11 +4,12 @@ import { supabase } from '../supabaseClient';
 import { authService } from './authService';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SUPABASE_FIRM_ID_FALLBACK = '6c03c55d-d9fa-43df-a0e1-a4c63df7ee5b';
 
 export function toSupabaseFirmId(firmId: string | undefined): string {
-    if (!firmId) return SUPABASE_FIRM_ID_FALLBACK;
-    return UUID_REGEX.test(firmId) ? firmId : SUPABASE_FIRM_ID_FALLBACK;
+    if (!firmId || !UUID_REGEX.test(firmId)) {
+        throw new Error('Invalid or missing firm ID. Please log in again.');
+    }
+    return firmId;
 }
 
 function mapRowToClient(client: any): Client {

@@ -2,8 +2,8 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { crmService } from "./api";
 import type { Client, AIRecommendationResponse, BankRates, AIComplianceResult } from '../types';
 
-const GEMINI_KEY = (typeof process !== 'undefined' && (process.env?.API_KEY ?? process.env?.GEMINI_API_KEY)) || '';
-const hasGeminiKey = GEMINI_KEY && String(GEMINI_KEY) !== 'undefined';
+const GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY || import.meta.env.VITE_API_KEY || '';
+const hasGeminiKey = Boolean(GEMINI_KEY);
 
 function getAi(): GoogleGenAI | null {
   if (!hasGeminiKey) return null;

@@ -85,6 +85,65 @@ export interface Company {
 }
 
 export const applicationService = {
+  getApplications: async (firmId: string) => {
+    const { data, error } = await supabase
+      .from('applications')
+      .select('*, clients(first_name, last_name, email)')
+      .eq('firm_id', firmId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+
+  getApplicationById: async (id: string) => {
+    const { data, error } = await supabase
+      .from('applications')
+      .select('*, clients(first_name, last_name, email, phone)')
+      .eq('id', id)
+      .single();
+    if (error) throw error;
+    return data;
+  },
+
+  createApplication: async (payload: {
+    firm_id: string;
+    client_id: string;
+    assigned_to?: string;
+    application_type?: string;
+    loan_amount?: number;
+    loan_purpose?: string;
+  }) => {
+    const { data, error } = await supabase
+      .from('applications')
+      .insert([{ workflow_stage: 'draft', status: 'active', ...payload }])
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  },
+
+  updateApplication: async (id: string, payload: Record<string, unknown>) => {
+    const { data, error } = await supabase
+      .from('applications')
+      .update({ ...payload, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  },
+
+  updateWorkflowStage: async (id: string, stage: 'draft' | 'submitted' | 'conditional' | 'unconditional' | 'settled' | 'declined') => {
+    const { data, error } = await supabase
+      .from('applications')
+      .update({ workflow_stage: stage, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  },
+
   getApplicants: async (applicationId: string) => {
     const { data, error } = await supabase.from('applicants').select('*').eq('application_id', applicationId).order('created_at');
     if (error) throw error;
