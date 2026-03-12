@@ -5,7 +5,7 @@ import type { BankRates, AIRecommendationResponse } from '../../types';
 import { Button } from '../common/Button';
 import { Icon, IconName } from '../common/Icon';
 import { Card } from '../common/Card';
-import { applicationService, type Applicant, type Company, type Income } from '../../services/applicationService';
+import { applicationService, type Applicant, type Company, type Income, type Expense } from '../../services/applicationService';
 import { crmService } from '../../services/api';
 import { geminiService } from '../../services/geminiService';
 
@@ -113,6 +113,7 @@ const INCOME_TYPES = [
 ] as const;
 
 const FREQUENCIES = ['Weekly', 'Fortnightly', 'Monthly', 'Annually'] as const;
+const EXPENSE_FREQUENCIES = ['Weekly', 'Fortnightly', 'Monthly', 'Annually'] as const;
 
 const FormSection: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
   <div className="mb-6">
@@ -262,6 +263,24 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
         .finally(() => setIncomeTabLoading(false));
     }
   }, [activeTab, application.id, applicants.length, applicants.map((a) => a.id).join(',')]);
+
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [expensesLoading, setExpensesLoading] = useState(false);
+  const [showExpensesModal, setShowExpensesModal] = useState(false);
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
+  const [expenseFormError, setExpenseFormError] = useState<string | null>(null);
+  const [submittingExpense, setSubmittingExpense] = useState(false);
+
+  useEffect(() => {
+    if (activeTab === 'expenses' && application.id) {
+      setExpensesLoading(true);
+      applicationService
+        .getExpenses(application.id)
+        .then((data) => setExpenses(data || []))
+        .catch(() => setExpenses([]))
+        .finally(() => setExpensesLoading(false));
+    }
+  }, [activeTab, application.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -438,6 +457,101 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
   const [incomeForm, setIncomeForm] = useState(emptyIncomeForm());
   const [incomeFormError, setIncomeFormError] = useState<string | null>(null);
   const [submittingIncome, setSubmittingIncome] = useState(false);
+
+  const resetExpenseForm = () => {
+    setExpenseForm(emptyExpenseForm());
+    setExpenseFormError(null);
+  };
+
+  const emptyExpenseForm = () => ({
+    household_name: '',
+    food_freq: 'Monthly',
+    disc_freq: 'Monthly',
+    children_freq: 'Monthly',
+    health_freq: 'Monthly',
+    transport_freq: 'Monthly',
+    housing_freq: 'Monthly',
+    commitments_freq: 'Monthly',
+    food_groceries: '0',
+    dining_takeaway: '0',
+    alcohol_tobacco: '0',
+    entertainment: '0',
+    holidays_travel: '0',
+    clothing_personal: '0',
+    grooming_beauty: '0',
+    phone_internet: '0',
+    streaming_subscriptions: '0',
+    gifts_donations: '0',
+    pets: '0',
+    other_discretionary: '0',
+    childcare: '0',
+    school_fees_public: '0',
+    school_fees_private: '0',
+    tertiary_education: '0',
+    health_insurance: '0',
+    medical_dental: '0',
+    gym_sports: '0',
+    life_insurance: '0',
+    income_protection: '0',
+    vehicle_running_costs: '0',
+    vehicle_insurance: '0',
+    public_transport: '0',
+    rates: '0',
+    body_corporate: '0',
+    home_insurance: '0',
+    utilities: '0',
+    rent_board: '0',
+    property_maintenance: '0',
+    child_support: '0',
+    spousal_maintenance: '0',
+    other_regular_commitments: '0',
+  });
+
+  const [expenseForm, setExpenseForm] = useState(emptyExpenseForm());
+
+  const expenseToForm = (exp: Expense) => ({
+    household_name: (exp.household_name as string) || '',
+    food_freq: 'Monthly',
+    disc_freq: 'Monthly',
+    children_freq: 'Monthly',
+    health_freq: 'Monthly',
+    transport_freq: 'Monthly',
+    housing_freq: 'Monthly',
+    commitments_freq: 'Monthly',
+    food_groceries: exp.food_groceries != null ? String(exp.food_groceries) : '0',
+    dining_takeaway: exp.dining_takeaway != null ? String(exp.dining_takeaway) : '0',
+    alcohol_tobacco: exp.alcohol_tobacco != null ? String(exp.alcohol_tobacco) : '0',
+    entertainment: exp.entertainment != null ? String(exp.entertainment) : '0',
+    holidays_travel: exp.holidays_travel != null ? String(exp.holidays_travel) : '0',
+    clothing_personal: exp.clothing_personal != null ? String(exp.clothing_personal) : '0',
+    grooming_beauty: exp.grooming_beauty != null ? String(exp.grooming_beauty) : '0',
+    phone_internet: exp.phone_internet != null ? String(exp.phone_internet) : '0',
+    streaming_subscriptions: exp.streaming_subscriptions != null ? String(exp.streaming_subscriptions) : '0',
+    gifts_donations: exp.gifts_donations != null ? String(exp.gifts_donations) : '0',
+    pets: exp.pets != null ? String(exp.pets) : '0',
+    other_discretionary: exp.other_discretionary != null ? String(exp.other_discretionary) : '0',
+    childcare: exp.childcare != null ? String(exp.childcare) : '0',
+    school_fees_public: exp.school_fees_public != null ? String(exp.school_fees_public) : '0',
+    school_fees_private: exp.school_fees_private != null ? String(exp.school_fees_private) : '0',
+    tertiary_education: exp.tertiary_education != null ? String(exp.tertiary_education) : '0',
+    health_insurance: exp.health_insurance != null ? String(exp.health_insurance) : '0',
+    medical_dental: exp.medical_dental != null ? String(exp.medical_dental) : '0',
+    gym_sports: exp.gym_sports != null ? String(exp.gym_sports) : '0',
+    life_insurance: exp.life_insurance != null ? String(exp.life_insurance) : '0',
+    income_protection: exp.income_protection != null ? String(exp.income_protection) : '0',
+    vehicle_running_costs: exp.vehicle_running_costs != null ? String(exp.vehicle_running_costs) : '0',
+    vehicle_insurance: exp.vehicle_insurance != null ? String(exp.vehicle_insurance) : '0',
+    public_transport: exp.public_transport != null ? String(exp.public_transport) : '0',
+    rates: exp.rates != null ? String(exp.rates) : '0',
+    body_corporate: exp.body_corporate != null ? String(exp.body_corporate) : '0',
+    home_insurance: exp.home_insurance != null ? String(exp.home_insurance) : '0',
+    utilities: exp.utilities != null ? String(exp.utilities) : '0',
+    rent_board: exp.rent_board != null ? String(exp.rent_board) : '0',
+    property_maintenance: exp.property_maintenance != null ? String(exp.property_maintenance) : '0',
+    child_support: exp.child_support != null ? String(exp.child_support) : '0',
+    spousal_maintenance: exp.spousal_maintenance != null ? String(exp.spousal_maintenance) : '0',
+    other_regular_commitments: exp.other_regular_commitments != null ? String(exp.other_regular_commitments) : '0',
+  });
 
   const resetApplicantForm = () => {
     setApplicantForm(emptyApplicantForm());
@@ -617,6 +731,125 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
     return pbt + addbacks - dep - nonRec - tax;
   };
 
+  const expenseMonthlyFrom = (val: string, freq: string) => {
+    const n = Number(val) || 0;
+    switch (freq) {
+      case 'Weekly':
+        return (n * 52) / 12;
+      case 'Fortnightly':
+        return (n * 26) / 12;
+      case 'Monthly':
+        return n;
+      case 'Annually':
+        return n / 12;
+      default:
+        return n;
+    }
+  };
+
+  const computeExpenseTotals = (f = expenseForm) => {
+    const foodMonthly =
+      expenseMonthlyFrom(f.food_groceries, f.food_freq) +
+      expenseMonthlyFrom(f.dining_takeaway, f.food_freq) +
+      expenseMonthlyFrom(f.alcohol_tobacco, f.food_freq);
+
+    const discMonthly =
+      expenseMonthlyFrom(f.entertainment, f.disc_freq) +
+      expenseMonthlyFrom(f.holidays_travel, f.disc_freq) +
+      expenseMonthlyFrom(f.clothing_personal, f.disc_freq) +
+      expenseMonthlyFrom(f.grooming_beauty, f.disc_freq) +
+      expenseMonthlyFrom(f.phone_internet, f.disc_freq) +
+      expenseMonthlyFrom(f.streaming_subscriptions, f.disc_freq) +
+      expenseMonthlyFrom(f.gifts_donations, f.disc_freq) +
+      expenseMonthlyFrom(f.pets, f.disc_freq) +
+      expenseMonthlyFrom(f.other_discretionary, f.disc_freq);
+
+    const childrenMonthly =
+      expenseMonthlyFrom(f.childcare, f.children_freq) +
+      expenseMonthlyFrom(f.school_fees_public, f.children_freq) +
+      expenseMonthlyFrom(f.school_fees_private, f.children_freq) +
+      expenseMonthlyFrom(f.tertiary_education, f.children_freq);
+
+    const healthMonthly =
+      expenseMonthlyFrom(f.health_insurance, f.health_freq) +
+      expenseMonthlyFrom(f.medical_dental, f.health_freq) +
+      expenseMonthlyFrom(f.gym_sports, f.health_freq) +
+      expenseMonthlyFrom(f.life_insurance, f.health_freq) +
+      expenseMonthlyFrom(f.income_protection, f.health_freq);
+
+    const transportMonthly =
+      expenseMonthlyFrom(f.vehicle_running_costs, f.transport_freq) +
+      expenseMonthlyFrom(f.vehicle_insurance, f.transport_freq) +
+      expenseMonthlyFrom(f.public_transport, f.transport_freq);
+
+    const housingMonthly =
+      expenseMonthlyFrom(f.rates, f.housing_freq) +
+      expenseMonthlyFrom(f.body_corporate, f.housing_freq) +
+      expenseMonthlyFrom(f.home_insurance, f.housing_freq) +
+      expenseMonthlyFrom(f.utilities, f.housing_freq) +
+      expenseMonthlyFrom(f.rent_board, f.housing_freq) +
+      expenseMonthlyFrom(f.property_maintenance, f.housing_freq);
+
+    const commitmentsMonthly =
+      expenseMonthlyFrom(f.child_support, f.commitments_freq) +
+      expenseMonthlyFrom(f.spousal_maintenance, f.commitments_freq) +
+      expenseMonthlyFrom(f.other_regular_commitments, f.commitments_freq);
+
+    const totalEssential = housingMonthly + transportMonthly + healthMonthly;
+    const totalDiscretionary = foodMonthly + discMonthly + childrenMonthly;
+    const totalMonthly = totalEssential + totalDiscretionary + commitmentsMonthly;
+
+    return { totalEssential, totalDiscretionary, totalMonthly };
+  };
+
+  const buildExpensePayload = (): Partial<Expense> => {
+    const { totalEssential, totalDiscretionary, totalMonthly } = computeExpenseTotals();
+    const f = expenseForm;
+    const num = (v: string) => (v === '' ? null : Number(v) || 0);
+
+    return {
+      household_name: f.household_name.trim(),
+      expense_frequency: 'monthly',
+      food_groceries: num(f.food_groceries),
+      dining_takeaway: num(f.dining_takeaway),
+      alcohol_tobacco: num(f.alcohol_tobacco),
+      entertainment: num(f.entertainment),
+      holidays_travel: num(f.holidays_travel),
+      clothing_personal: num(f.clothing_personal),
+      grooming_beauty: num(f.grooming_beauty),
+      phone_internet: num(f.phone_internet),
+      streaming_subscriptions: num(f.streaming_subscriptions),
+      gifts_donations: num(f.gifts_donations),
+      pets: num(f.pets),
+      other_discretionary: num(f.other_discretionary),
+      childcare: num(f.childcare),
+      school_fees_public: num(f.school_fees_public),
+      school_fees_private: num(f.school_fees_private),
+      tertiary_education: num(f.tertiary_education),
+      health_insurance: num(f.health_insurance),
+      medical_dental: num(f.medical_dental),
+      gym_sports: num(f.gym_sports),
+      life_insurance: num(f.life_insurance),
+      income_protection: num(f.income_protection),
+      vehicle_running_costs: num(f.vehicle_running_costs),
+      vehicle_insurance: num(f.vehicle_insurance),
+      public_transport: num(f.public_transport),
+      rates: num(f.rates),
+      body_corporate: num(f.body_corporate),
+      home_insurance: num(f.home_insurance),
+      utilities: num(f.utilities),
+      rent_board: num(f.rent_board),
+      property_maintenance: num(f.property_maintenance),
+      child_support: num(f.child_support),
+      spousal_maintenance: num(f.spousal_maintenance),
+      other_regular_commitments: num(f.other_regular_commitments),
+      total_essential: totalEssential,
+      total_discretionary: totalDiscretionary,
+      total_monthly: totalMonthly,
+    } as Partial<Expense>;
+  };
+
+
   const buildIncomePayload = (): Partial<Income> => {
     const type = incomeForm.income_type;
     const payload: Partial<Income> & Record<string, unknown> = { income_type: type };
@@ -702,6 +935,53 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
       setToastMessage('Income removed');
     } catch (err) {
       setToastMessage(err instanceof Error ? err.message : 'Failed to remove income');
+    }
+  };
+
+  const handleSaveExpenseSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!expenseForm.household_name.trim()) {
+      setExpenseFormError('Household name is required.');
+      return;
+    }
+    setSubmittingExpense(true);
+    setExpenseFormError(null);
+    try {
+      const payload = buildExpensePayload();
+      if (editingExpense) {
+        await applicationService.updateExpense(editingExpense.id, payload);
+        setToastMessage('Household expenses updated');
+      } else {
+        await applicationService.createExpense(application.id, payload);
+        setToastMessage('Household expenses added');
+      }
+      setShowExpensesModal(false);
+      setEditingExpense(null);
+      resetExpenseForm();
+      const data = await applicationService.getExpenses(application.id);
+      setExpenses(data || []);
+    } catch (err) {
+      const msg =
+        err && typeof err === 'object' && 'message' in err
+          ? String((err as { message?: string }).message)
+          : err instanceof Error
+            ? err.message
+            : 'Failed to save expenses.';
+      setExpenseFormError(msg);
+    } finally {
+      setSubmittingExpense(false);
+    }
+  };
+
+  const handleDeleteExpense = async (id: string) => {
+    if (!window.confirm('Are you sure you want to remove this household expenses record?')) return;
+    try {
+      await applicationService.deleteExpense(id);
+      const data = await applicationService.getExpenses(application.id);
+      setExpenses(data || []);
+      setToastMessage('Household expenses removed');
+    } catch (err) {
+      setToastMessage(err instanceof Error ? err.message : 'Failed to remove expenses');
     }
   };
 
@@ -1730,6 +2010,696 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
     );
   };
 
+  const renderExpensesTab = () => {
+    if (expensesLoading) {
+      return (
+        <div className="flex justify-center items-center py-24">
+          <Icon name="Loader" className="h-10 w-10 animate-spin text-primary-500 dark:text-primary-400" />
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Household Expenses</h3>
+          <Button
+            leftIcon="PlusCircle"
+            type="button"
+            onClick={() => {
+              setEditingExpense(null);
+              resetExpenseForm();
+              setShowExpensesModal(true);
+            }}
+          >
+            Add Household Expenses
+          </Button>
+        </div>
+
+        {expenses.length === 0 ? (
+          <Card className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 py-12 text-center">
+            <p className="text-gray-500 dark:text-gray-400">
+              No household expenses yet. Click &quot;Add Household Expenses&quot; to get started.
+            </p>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {expenses.map((exp) => (
+              <Card
+                key={exp.id}
+                className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 p-4"
+              >
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="font-semibold text-gray-900 dark:text-white">
+                      {exp.household_name || 'Household'}
+                    </p>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      Total monthly: ${Number(exp.total_monthly || 0).toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      leftIcon="Pencil"
+                      onClick={() => {
+                        setEditingExpense(exp);
+                        setExpenseForm(expenseToForm(exp));
+                        setExpenseFormError(null);
+                        setShowExpensesModal(true);
+                      }}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      leftIcon="Trash2"
+                      onClick={() => handleDeleteExpense(exp.id)}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+
+        {showExpensesModal && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col border border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  {editingExpense ? 'Edit Household Expenses' : 'Add Household Expenses'}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowExpensesModal(false);
+                    setEditingExpense(null);
+                    resetExpenseForm();
+                  }}
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                >
+                  <Icon name="X" className="h-5 w-5" />
+                </button>
+              </div>
+              <form onSubmit={handleSaveExpenseSubmit} className="flex flex-col min-h-0">
+                <div className="overflow-y-auto p-4 flex-1">
+                  {expenseFormError && (
+                    <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-md mb-4">
+                      {expenseFormError}
+                    </p>
+                  )}
+
+                  <div className="mb-4">
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                      Household Name
+                    </label>
+                    <input
+                      type="text"
+                      value={expenseForm.household_name}
+                      onChange={(e) => setExpenseForm((f) => ({ ...f, household_name: e.target.value }))}
+                      className={inputClasses}
+                      placeholder="e.g. Household of Mr BS SS"
+                      required
+                    />
+                  </div>
+
+                  <FormSection title="Food &amp; Groceries">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Food &amp; Groceries
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.food_groceries}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, food_groceries: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Dining &amp; Takeaway
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.dining_takeaway}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, dining_takeaway: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Alcohol &amp; Tobacco
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.alcohol_tobacco}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, alcohol_tobacco: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Frequency
+                      </label>
+                      <select
+                        value={expenseForm.food_freq}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, food_freq: e.target.value }))}
+                        className={inputClasses}
+                      >
+                        {EXPENSE_FREQUENCIES.map((fq) => (
+                          <option key={fq} value={fq}>
+                            {fq}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </FormSection>
+
+                  <FormSection title="Discretionary">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Entertainment
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.entertainment}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, entertainment: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Holidays &amp; Travel
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.holidays_travel}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, holidays_travel: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Clothing &amp; Personal
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.clothing_personal}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, clothing_personal: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Grooming &amp; Beauty
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.grooming_beauty}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, grooming_beauty: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Phone &amp; Internet
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.phone_internet}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, phone_internet: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Streaming &amp; Subscriptions
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.streaming_subscriptions}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, streaming_subscriptions: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Gifts &amp; Donations
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.gifts_donations}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, gifts_donations: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Pets
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.pets}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, pets: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Other Discretionary
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.other_discretionary}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, other_discretionary: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Frequency
+                      </label>
+                      <select
+                        value={expenseForm.disc_freq}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, disc_freq: e.target.value }))}
+                        className={inputClasses}
+                      >
+                        {EXPENSE_FREQUENCIES.map((fq) => (
+                          <option key={fq} value={fq}>
+                            {fq}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </FormSection>
+
+                  <FormSection title="Children &amp; Education">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Childcare
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.childcare}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, childcare: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        School Fees — Public
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.school_fees_public}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, school_fees_public: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        School Fees — Private
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.school_fees_private}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, school_fees_private: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Tertiary Education
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.tertiary_education}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, tertiary_education: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Frequency
+                      </label>
+                      <select
+                        value={expenseForm.children_freq}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, children_freq: e.target.value }))}
+                        className={inputClasses}
+                      >
+                        {EXPENSE_FREQUENCIES.map((fq) => (
+                          <option key={fq} value={fq}>
+                            {fq}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </FormSection>
+
+                  <FormSection title="Health &amp; Wellness">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Health Insurance
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.health_insurance}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, health_insurance: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Medical &amp; Dental
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.medical_dental}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, medical_dental: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Gym &amp; Sports
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.gym_sports}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, gym_sports: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Life Insurance
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.life_insurance}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, life_insurance: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Income Protection
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.income_protection}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, income_protection: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Frequency
+                      </label>
+                      <select
+                        value={expenseForm.health_freq}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, health_freq: e.target.value }))}
+                        className={inputClasses}
+                      >
+                        {EXPENSE_FREQUENCIES.map((fq) => (
+                          <option key={fq} value={fq}>
+                            {fq}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </FormSection>
+
+                  <FormSection title="Transport">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Vehicle Running Costs
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.vehicle_running_costs}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, vehicle_running_costs: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Vehicle Insurance
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.vehicle_insurance}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, vehicle_insurance: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Public Transport
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.public_transport}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, public_transport: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Frequency
+                      </label>
+                      <select
+                        value={expenseForm.transport_freq}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, transport_freq: e.target.value }))}
+                        className={inputClasses}
+                      >
+                        {EXPENSE_FREQUENCIES.map((fq) => (
+                          <option key={fq} value={fq}>
+                            {fq}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </FormSection>
+
+                  <FormSection title="Property &amp; Housing">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Rates
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.rates}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, rates: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Body Corporate
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.body_corporate}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, body_corporate: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Home Insurance
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.home_insurance}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, home_insurance: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Utilities
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.utilities}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, utilities: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Rent &amp; Board
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.rent_board}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, rent_board: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Property Maintenance
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.property_maintenance}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, property_maintenance: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Frequency
+                      </label>
+                      <select
+                        value={expenseForm.housing_freq}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, housing_freq: e.target.value }))}
+                        className={inputClasses}
+                      >
+                        {EXPENSE_FREQUENCIES.map((fq) => (
+                          <option key={fq} value={fq}>
+                            {fq}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </FormSection>
+
+                  <FormSection title="Other Commitments">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Child Support
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.child_support}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, child_support: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Spousal Maintenance
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.spousal_maintenance}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, spousal_maintenance: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Other Regular Commitments
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={expenseForm.other_regular_commitments}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, other_regular_commitments: e.target.value }))}
+                        className={inputClasses}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Frequency
+                      </label>
+                      <select
+                        value={expenseForm.commitments_freq}
+                        onChange={(e) => setExpenseForm((f) => ({ ...f, commitments_freq: e.target.value }))}
+                        className={inputClasses}
+                      >
+                        {EXPENSE_FREQUENCIES.map((fq) => (
+                          <option key={fq} value={fq}>
+                            {fq}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </FormSection>
+
+                  {(() => {
+                    const { totalEssential, totalDiscretionary, totalMonthly } = computeExpenseTotals();
+                    return (
+                      <div className="mt-4 space-y-1 text-sm">
+                        <p className="font-medium text-gray-900 dark:text-white">
+                          Total Essential (housing + transport + health): ${totalEssential.toLocaleString()}
+                        </p>
+                        <p className="font-medium text-gray-900 dark:text-white">
+                          Total Discretionary (food + discretionary + children): $
+                          {totalDiscretionary.toLocaleString()}
+                        </p>
+                        <p className="font-semibold text-gray-900 dark:text-white">
+                          Total Monthly: ${totalMonthly.toLocaleString()}
+                        </p>
+                      </div>
+                    );
+                  })()}
+                </div>
+                <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3 flex-shrink-0">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      setShowExpensesModal(false);
+                      setEditingExpense(null);
+                      resetExpenseForm();
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button type="submit" isLoading={submittingExpense}>
+                    {editingExpense ? 'Save changes' : 'Add Household Expenses'}
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderTabContent = () => {
     switch (activeTab) {
       case 'overview':
@@ -1739,7 +2709,7 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
       case 'income':
         return renderIncomeTab();
       case 'expenses':
-        return <ComingSoonPlaceholder tabName="Expenses" />;
+        return renderExpensesTab();
       case 'assets':
         return <ComingSoonPlaceholder tabName="Assets" />;
       case 'liabilities':
