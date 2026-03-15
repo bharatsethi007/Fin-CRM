@@ -8,27 +8,13 @@ import { supabase } from '../supabaseClient';
 const fetchAdvisorProfile = async (userId: string): Promise<{ advisor: Advisor; firm: Firm }> => {
     const { data, error } = await supabase
         .from('advisors')
-        .select(`
-            id,
-            email,
-            first_name,
-            last_name,
-            role,
-            avatar_url,
-            preferred_timezone,
-            start_week_on,
-            firm_id,
-            firms ( id, name )
-        `)
+        .select('id, email, first_name, last_name, role, avatar_url, preferred_timezone, start_week_on, firm_id, firms(id, name)')
         .eq('id', userId)
         .single();
 
     if (error || !data) {
         throw new Error('Could not load your advisor profile. Please contact your administrator.');
     }
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const firmData = (data as any).firms;
 
     const advisor: Advisor = {
         id: data.id,
@@ -41,9 +27,13 @@ const fetchAdvisorProfile = async (userId: string): Promise<{ advisor: Advisor; 
         startWeekOn: (data.start_week_on as 'Sunday' | 'Monday') || 'Monday',
     };
 
+    const firmsRelation = (data as { firms?: { id: string; name: string } | { id: string; name: string }[] }).firms;
+    const firmData = Array.isArray(firmsRelation) ? firmsRelation[0] : firmsRelation;
+    const firmName = firmData?.name || 'Unknown Firm';
+
     const firm: Firm = {
-        id: firmData?.id ?? data.firm_id,
-        name: firmData?.name ?? 'Unknown Firm',
+        id: data.firm_id,
+        name: firmName,
     };
 
     return { advisor, firm };

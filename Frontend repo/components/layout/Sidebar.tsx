@@ -58,6 +58,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, setCurrentView, f
     const [teamMembers, setTeamMembers] = useState<Advisor[]>([]);
     const [isLoadingTeam, setIsLoadingTeam] = useState(true);
 
+    console.log('firm from context:', firm);
+
     useEffect(() => {
         setIsLoadingTeam(true);
         crmService.getAdvisors()
@@ -78,7 +80,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, setCurrentView, f
                     <Icon name="Building" className="h-6 w-6 text-primary-600 dark:text-primary-300" />
                 </div>
                 <div className="ml-3">
-                    <h2 className="text-sm font-semibold text-gray-800 dark:text-white">{firm.name}</h2>
+                    <h2 className="text-sm font-semibold text-gray-800 dark:text-white">{firm?.name || 'Kiwi Mortgages'}</h2>
                 </div>
             </div>
             

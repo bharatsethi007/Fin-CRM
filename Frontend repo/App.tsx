@@ -102,16 +102,19 @@ const App: React.FC = () => {
         const init = async () => {
             // 1. Try to restore an existing session from storage
             const existing = await authService.restoreSession();
+            console.log('Restored session firm:', existing?.firm);
             if (existing) {
                 setCurrentAdvisor(existing.advisor);
+                // Must set the firm object from profile, not the whole profile
                 setCurrentFirm(existing.firm);
             }
             setIsRestoringSession(false);
 
-            // 2. Subscribe to future auth events
+            // 2. Subscribe to future auth events (login, token refresh, etc.)
             unsubscribe = authService.onAuthStateChange((event, profile) => {
                 if (profile) {
                     setCurrentAdvisor(profile.advisor);
+                    // Must set the firm object from profile, not the whole profile
                     setCurrentFirm(profile.firm);
                 } else {
                     // SIGNED_OUT or token expired
@@ -137,6 +140,7 @@ const App: React.FC = () => {
         // and onAuthStateChange will fire — but we also set state directly
         // here to avoid any latency before the subscription fires.
         setCurrentAdvisor(advisor);
+        // firm is the second argument from LoginScreen; pass it to state, not advisor
         setCurrentFirm(firm);
     };
 
