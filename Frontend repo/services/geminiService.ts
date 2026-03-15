@@ -54,6 +54,28 @@ const getDashboardInsights = async (prompt: string): Promise<string> => {
   }
 };
 
+/** Sanitized dashboard data (no PII). Used for AI Insights card. */
+export type SanitizedDashboardData = {
+  totalPipelineValue: number;
+  activeApplicationsCount: number;
+  tasksDueCount: number;
+  applicationsByStage: Record<string, number>;
+  settledThisMonthCount: number;
+};
+
+/** Get 3 short bullet insights from Gemini based on sanitized dashboard data only (no client names or PII). */
+export const getDashboardAIInsights = async (data: SanitizedDashboardData): Promise<string> => {
+  const ai = getAi();
+  if (!ai) throw new Error('Gemini API key is not configured.');
+  const dataStr = JSON.stringify(data, null, 2);
+  const fullPrompt = `You are an AI assistant for a NZ mortgage broker dashboard. Based on this data, give 3 short bullet point insights and suggestions. Each bullet max 15 words. Focus on: what needs attention, pipeline health, one opportunity. Data: ${dataStr}`;
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: fullPrompt,
+  });
+  return response.text ?? '';
+};
+
 const getLenderRecommendation = async (
   client: Client,
   lendingDetails: { loanAmount: number; purpose: string; term: number },
@@ -301,6 +323,7 @@ Application data (all PII removed): ${sanitisedApplicationData}`;
 
 export const geminiService = {
   getDashboardInsights,
+  getDashboardAIInsights,
   getLenderRecommendation,
   summarizeAndExtractActions,
   analyzeCompliance,

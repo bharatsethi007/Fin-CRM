@@ -8,15 +8,14 @@ import {
   XAxis,
   YAxis,
   Tooltip,
-  Legend,
   ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
   CartesianGrid,
 } from 'recharts';
 import { crmService } from '../../services/api';
-import type { Application, Advisor, Task, Client, Note } from '../../types';
+import { geminiService } from '../../services/geminiService';
+import type { SanitizedDashboardData } from '../../services/geminiService';
+import { Icon } from '../common/Icon';
+import type { Application, Advisor, Task, Client, Note, Lead } from '../../types';
 import { ApplicationStatus } from '../../types';
 
 // Pastel palette: background (pastel) + text/border (darker)
@@ -87,7 +86,8 @@ function workflowKey(a: Application): string {
 }
 
 const PIPELINE_BOARD_STAGES = ['draft', 'submitted', 'conditional', 'unconditional', 'settled'] as const;
-const DONUT_STAGES = ['draft', 'submitted', 'conditional', 'unconditional', 'settled'] as const;
+const ALL_STAGES = ['draft', 'submitted', 'conditional', 'unconditional', 'settled', 'declined'] as const;
+const AI_INSIGHTS_CACHE_KEY = 'dashboard_ai_insights';
 
 function getMonthKeysLast6(): { key: string; label: string }[] {
   const out: { key: string; label: string }[] = [];
@@ -125,7 +125,13 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [clients, setClients] = useState<Client[]>([]);
   const [advisors, setAdvisors] = useState<Advisor[]>([]);
   const [recentNotes, setRecentNotes] = useState<Note[]>([]);
+  const [leads, setLeads] = useState<Lead[]>([]);
   const [activeAppsSearch, setActiveAppsSearch] = useState('');
+  const [activeAppsStageFilter, setActiveAppsStageFilter] = useState<string>('all');
+  const [activeAppsPage, setActiveAppsPage] = useState(1);
+  const [leadsTimeFilter, setLeadsTimeFilter] = useState<'this_week' | 'this_month'>('this_week');
+  const [aiInsights, setAiInsights] = useState<string>('');
+  const [aiInsightsLoading, setAiInsightsLoading] = useState(false);
   const [advisorPerfFilter, setAdvisorPerfFilter] = useState<'this_month' | 'ytd'>('this_month');
   const [loading, setLoading] = useState(true);
 
@@ -138,14 +144,16 @@ const Dashboard: React.FC<DashboardProps> = ({
       crmService.getClients(),
       crmService.getAdvisors(),
       crmService.getNotes(),
+      crmService.getLeads(),
     ])
-      .then(([apps, tasks, clientList, advisorList, notes]) => {
+      .then(([apps, tasks, clientList, advisorList, notes, leadsList]) => {
         if (cancelled) return;
         setAllApplications(apps || []);
         setAllTasks(tasks || []);
         setClients(clientList || []);
         setAdvisors(advisorList || []);
         setRecentNotes((notes || []).slice(0, 5));
+        setLeads(leadsList || []);
       })
       .catch((err) => console.error('Dashboard load error:', err))
       .finally(() => {
@@ -365,13 +373,6 @@ const Dashboard: React.FC<DashboardProps> = ({
     });
   }, [settledApplications, monthKeys]);
 
-  const donutData = useMemo(() => {
-    return DONUT_STAGES.map((stage) => ({
-      name: stage.charAt(0).toUpperCase() + stage.slice(1),
-      value: viewFilteredApplications.filter((a) => workflowKey(a) === stage).length,
-    })).filter((d) => d.value > 0);
-  }, [viewFilteredApplications]);
-
   const clientNamesById = useMemo(() => {
     const map: Record<string, string> = {};
     clients.forEach((c) => { map[c.id] = c.name; });
@@ -386,13 +387,86 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   const activeApplicationsFiltered = useMemo(() => {
     const q = activeAppsSearch.trim().toLowerCase();
-    if (!q) return activeApplications;
-    return activeApplications.filter((a) =>
-      (a.clientName || '').toLowerCase().includes(q)
-    );
-  }, [activeApplications, activeAppsSearch]);
+    let list = activeApplications;
+    if (q) list = list.filter((a) => (a.clientName || '').toLowerCase().includes(q));
+    if (activeAppsStageFilter !== 'all') {
+      list = list.filter((a) => workflowKey(a) === activeAppsStageFilter);
+    }
+    return list;
+  }, [activeApplications, activeAppsSearch, activeAppsStageFilter]);
+
+  const ACTIVE_APPS_PAGE_SIZE = 10;
+  const activeApplicationsPaginated = useMemo(() => {
+    const start = (activeAppsPage - 1) * ACTIVE_APPS_PAGE_SIZE;
+    return activeApplicationsFiltered.slice(start, start + ACTIVE_APPS_PAGE_SIZE);
+  }, [activeApplicationsFiltered, activeAppsPage]);
+  const activeAppsTotalPages = Math.max(1, Math.ceil(activeApplicationsFiltered.length / ACTIVE_APPS_PAGE_SIZE));
+
+  const pendingTasks = useMemo(() => {
+    return (allTasks || [])
+      .filter((t) => !t.isCompleted)
+      .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''))
+      .slice(0, 6);
+  }, [allTasks]);
+
+  const recentLeadsFiltered = useMemo(() => {
+    const now = new Date();
+    const isThisWeek = (d: Date) => {
+      const start = new Date(now); start.setDate(now.getDate() - now.getDay());
+      start.setHours(0,0,0,0);
+      const end = new Date(start); end.setDate(start.getDate() + 7);
+      return d >= start && d < end;
+    };
+    const isThisMonth = (d: Date) => d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    return (leads || [])
+      .filter((l) => {
+        const d = new Date(l.dateAdded || 0);
+        return leadsTimeFilter === 'this_week' ? isThisWeek(d) : isThisMonth(d);
+      })
+      .sort((a, b) => new Date(b.dateAdded || 0).getTime() - new Date(a.dateAdded || 0).getTime())
+      .slice(0, 5);
+  }, [leads, leadsTimeFilter]);
+
+  const fetchAIInsights = React.useCallback(() => {
+    setAiInsightsLoading(true);
+    const sanitized: SanitizedDashboardData = {
+      totalPipelineValue: totalPipelineValue,
+      activeApplicationsCount: activeApplications.length,
+      tasksDueCount: tasksDueTodayCount,
+      applicationsByStage: PIPELINE_BOARD_STAGES.reduce((acc, s) => {
+        acc[s] = (pipelineByStage[s] || []).length;
+        return acc;
+      }, {} as Record<string, number>),
+      settledThisMonthCount,
+    };
+    geminiService
+      .getDashboardAIInsights(sanitized)
+      .then((text) => {
+        setAiInsights(text || '');
+        try { sessionStorage.setItem(AI_INSIGHTS_CACHE_KEY, text || ''); } catch (_) {}
+      })
+      .catch(() => setAiInsights('Unable to load insights.'))
+      .finally(() => setAiInsightsLoading(false));
+  }, [totalPipelineValue, activeApplications.length, tasksDueTodayCount, pipelineByStage, settledThisMonthCount]);
+
+  useEffect(() => {
+    try {
+      const cached = sessionStorage.getItem(AI_INSIGHTS_CACHE_KEY);
+      if (cached) setAiInsights(cached);
+      else if (!loading) fetchAIInsights();
+    } catch (_) {}
+  }, []);
+
+  useEffect(() => {
+    if (!loading && !aiInsights && !aiInsightsLoading) fetchAIInsights();
+  }, [loading]);
 
   const cardClass = 'bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6';
+  const advisorNamesById = useMemo(() => {
+    const m: Record<string, string> = {};
+    (advisors || []).forEach((a) => { m[a.id] = a.name; });
+    return m;
+  }, [advisors]);
 
   const metricCardStyles = [
     { backgroundColor: PASTEL.blue.bg, borderLeft: `4px solid ${PASTEL.blue.text}` },
@@ -568,291 +642,272 @@ const Dashboard: React.FC<DashboardProps> = ({
         ))}
       </div>
 
-      {/* ROW 3 — 65/35 Pipeline + Tasks + Recent Activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-10 gap-6">
-        <div className="lg:col-span-6">
-          <div className={cardClass}>
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-              Pipeline
-            </h3>
-            {loading ? (
-              <div className="flex gap-3 overflow-x-auto pb-2">
-                {PIPELINE_BOARD_STAGES.map((s) => (
-                  <div
-                    key={s}
-                    className="flex-shrink-0 w-44 h-64 bg-gray-100 dark:bg-gray-700 rounded-lg animate-pulse"
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="flex gap-3 overflow-x-auto pb-2" style={{ maxHeight: 320 }}>
-                {PIPELINE_BOARD_STAGES.map((stage) => {
-                  const apps = pipelineByStage[stage] || [];
-                  const stageTotal = apps.reduce((s, a) => s + (a.loanAmount || 0), 0);
-                  const stageStyle = STAGE_PASTEL[stage] || PASTEL.blue;
-                  return (
-                    <div
-                      key={stage}
-                      className="flex-shrink-0 w-44 flex flex-col rounded-lg bg-white dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700 overflow-hidden shadow-sm"
+      {/* ROW 4 — Pending Tasks, Recent Leads, AI Insights */}
+      <style>{`
+        @keyframes rotateBorder {
+          0% { background-position: 0% 50%; }
+          50% { background-position: 100% 50%; }
+          100% { background-position: 0% 50%; }
+        }
+        .ai-card-wrapper {
+          padding: 2px;
+          border-radius: 14px;
+          background: linear-gradient(270deg, #6366f1, #3b82f6, #06b6d4, #8b5cf6, #6366f1);
+          background-size: 400% 400%;
+          animation: rotateBorder 4s ease infinite;
+        }
+        .ai-card-inner {
+          background: white;
+          border-radius: 12px;
+          padding: 24px;
+          height: 100%;
+        }
+        .dark .ai-card-inner { background: rgb(31 41 55); }
+      `}</style>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Pending Tasks */}
+        <div className={cardClass}>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Pending Tasks</h3>
+          {loading ? (
+            <div className="space-y-2">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-12 bg-gray-100 dark:bg-gray-700 rounded-lg animate-pulse" />
+              ))}
+            </div>
+          ) : pendingTasks.length === 0 ? (
+            <p className="text-sm text-gray-500 dark:text-gray-400">No upcoming tasks.</p>
+          ) : (
+            <ul className="space-y-2">
+              {pendingTasks.map((task) => {
+                const due = task.dueDate ? new Date(task.dueDate) : null;
+                const isOverdue = due && due.getTime() < Date.now() && !task.isCompleted;
+                return (
+                  <li key={task.id}>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentView('tasks')}
+                      className="w-full text-left flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50"
                     >
-                      <div
-                        className="px-3 py-2 border-b border-gray-200 dark:border-gray-600"
-                        style={{ backgroundColor: stageStyle.bg }}
-                      >
-                        <span className="text-sm font-medium capitalize" style={{ color: stageStyle.text }}>
-                          {stage}
-                        </span>
-                        <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
-                          {apps.length}
-                        </span>
-                        <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-                          {formatCurrency(stageTotal)}
+                      <span
+                        className={`flex-shrink-0 w-2 h-2 rounded-full ${
+                          task.priority === 'High' ? 'bg-red-500' : task.priority === 'Medium' ? 'bg-yellow-500' : 'bg-gray-400'
+                        }`}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-gray-900 dark:text-white text-sm truncate">{task.title}</p>
+                        <p className="text-xs text-gray-400 dark:text-gray-500 truncate">
+                          {task.clientId ? clientNamesById[task.clientId] || '—' : '—'}
                         </p>
                       </div>
-                      <div className="flex-1 overflow-y-auto p-2 space-y-2 bg-gray-50/50 dark:bg-gray-800/30" style={{ maxHeight: 280 }}>
-                        {apps.map((app) => (
-                          <button
-                            key={app.id}
-                            type="button"
-                            onClick={() => navigateToApplication(app.id)}
-                            className="w-full text-left p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-600 hover:shadow-md transition-all border-l-4"
-                            style={{ borderLeftColor: stageStyle.border }}
-                          >
-                            <p className="font-medium text-gray-900 dark:text-white truncate text-sm">
-                              {app.clientName}
-                            </p>
-                            <p className="text-lg font-bold mt-0.5" style={{ color: PASTEL.blue.text }}>
-                              {app.loanAmount ? formatCurrency(app.loanAmount) : '—'}
-                            </p>
-                            <p className="text-xs text-gray-400 dark:text-gray-500 truncate">
-                              {app.lender || '—'}
-                            </p>
-                            <span className="inline-block mt-1 text-xs px-2 py-0.5 rounded" style={{ backgroundColor: stageStyle.bg, color: stageStyle.text }}>
-                              {daysInStage(app)}d
-                            </span>
-                          </button>
-                        ))}
-                      </div>
+                      <span className={`text-xs flex-shrink-0 ${isOverdue ? 'text-red-600 dark:text-red-400 font-medium' : 'text-gray-500 dark:text-gray-400'}`}>
+                        {task.dueDate ? new Date(task.dueDate).toLocaleDateString() : '—'}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <a
+            href="#"
+            onClick={(e) => { e.preventDefault(); setCurrentView('tasks'); }}
+            className="inline-block mt-3 text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline"
+          >
+            View all
+          </a>
+        </div>
+        {/* Recent Leads */}
+        <div className={cardClass}>
+          <div className="flex items-center justify-between gap-2 mb-4">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Recent Leads</h3>
+            <span className="flex-shrink-0 min-w-[1.75rem] h-7 px-2 flex items-center justify-center rounded-full text-xs font-medium bg-[#dbeafe] dark:bg-blue-900/40 text-[#2563eb] dark:text-blue-300">
+              {recentLeadsFiltered.length}
+            </span>
+          </div>
+          <div className="inline-flex rounded-lg p-0.5 bg-gray-100 dark:bg-gray-700 mb-4">
+            <button
+              type="button"
+              onClick={() => setLeadsTimeFilter('this_week')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md ${leadsTimeFilter === 'this_week' ? 'bg-white dark:bg-gray-600 shadow' : ''}`}
+            >
+              This Week
+            </button>
+            <button
+              type="button"
+              onClick={() => setLeadsTimeFilter('this_month')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md ${leadsTimeFilter === 'this_month' ? 'bg-white dark:bg-gray-600 shadow' : ''}`}
+            >
+              This Month
+            </button>
+          </div>
+          {loading ? (
+            <div className="space-y-2">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-14 bg-gray-100 dark:bg-gray-700 rounded-lg animate-pulse" />
+              ))}
+            </div>
+          ) : recentLeadsFiltered.length === 0 ? (
+            <p className="text-sm text-gray-500 dark:text-gray-400">No leads in this period.</p>
+          ) : (
+            <ul className="space-y-2">
+              {recentLeadsFiltered.map((l) => (
+                <li key={l.id}>
+                  <button
+                    type="button"
+                    onClick={() => navigateToClient(l.id)}
+                    className="w-full text-left flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                  >
+                    <div className="flex-shrink-0 w-9 h-9 rounded-full bg-[#dbeafe] dark:bg-blue-900/40 flex items-center justify-center text-xs font-medium text-[#2563eb] dark:text-blue-300">
+                      {(l.name || '?').slice(0, 2).toUpperCase()}
                     </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-gray-900 dark:text-white text-sm truncate">{l.name}</p>
+                      <p className="text-xs text-gray-400 dark:text-gray-500 truncate">{l.email}</p>
+                    </div>
+                    <span className="flex-shrink-0 px-2 py-0.5 text-xs rounded bg-[#dbeafe] dark:bg-blue-900/40 text-[#2563eb] dark:text-blue-300">
+                      {l.status || 'New'}
+                    </span>
+                    <span className="flex-shrink-0 text-xs text-gray-400 dark:text-gray-500">{timeAgo(l.dateAdded || '')}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        {/* AI Insights */}
+        <div className="ai-card-wrapper">
+          <div className="ai-card-inner">
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">✨ AI Insights</h3>
+              <button
+                type="button"
+                onClick={() => { try { sessionStorage.removeItem(AI_INSIGHTS_CACHE_KEY); } catch (_) {} fetchAIInsights(); }}
+                className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                Refresh
+              </button>
+            </div>
+            {aiInsightsLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Icon name="Loader" className="h-8 w-8 animate-spin text-blue-500" />
+              </div>
+            ) : aiInsights ? (
+              <ul className="space-y-2 text-sm text-gray-700 dark:text-gray-300">
+                {aiInsights.split('\n').filter((l) => l.trim()).slice(0, 3).map((line, i) => {
+                  const bulletColor = i === 0 ? '#2563eb' : i === 1 ? '#ea580c' : '#16a34a';
+                  return (
+                    <li key={i} className="flex gap-2">
+                      <span className="flex-shrink-0 w-2 h-2 rounded-full mt-1.5" style={{ backgroundColor: bulletColor }} />
+                      <span>{line.replace(/^[-*•]\s*/, '').trim()}</span>
+                    </li>
                   );
                 })}
-              </div>
+              </ul>
+            ) : (
+              <p className="text-sm text-gray-500 dark:text-gray-400">No insights yet. Click Refresh to generate.</p>
             )}
           </div>
         </div>
-        <div className="lg:col-span-4">
-          {viewMode === 'firm' && advisor.role === 'admin' ? (
-            <div className={cardClass}>
-              <div className="flex items-center justify-between gap-2 mb-4">
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                  Advisor Performance
-                </h3>
-                <div className="inline-flex rounded-lg p-0.5 bg-gray-100 dark:bg-gray-700">
-                  <button
-                    type="button"
-                    onClick={() => setAdvisorPerfFilter('this_month')}
-                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                      advisorPerfFilter === 'this_month'
-                        ? 'bg-white dark:bg-gray-600 shadow text-gray-900 dark:text-white'
-                        : 'text-gray-600 dark:text-gray-400'
-                    }`}
-                  >
-                    This Month
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAdvisorPerfFilter('ytd')}
-                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                      advisorPerfFilter === 'ytd'
-                        ? 'bg-white dark:bg-gray-600 shadow text-gray-900 dark:text-white'
-                        : 'text-gray-600 dark:text-gray-400'
-                    }`}
-                  >
-                    YTD
-                  </button>
-                </div>
-              </div>
-              {loading ? (
-                <div className="overflow-x-auto">
-                  <div className="h-48 bg-gray-100 dark:bg-gray-700 rounded-lg animate-pulse" />
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm text-left text-gray-700 dark:text-gray-300">
-                    <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-600">
-                      <tr>
-                        <th className="py-2 pr-2">Advisor</th>
-                        <th className="py-2 px-2 text-right">Active Deals</th>
-                        <th className="py-2 px-2 text-right">Pipeline Value</th>
-                        <th className="py-2 px-2 text-right">{advisorPerfFilter === 'ytd' ? 'Settled YTD' : 'Settled This Month'}</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                      {advisorPerformanceRows.map(({ advisor: a, activeDeals, pipelineValue, settledThisMonth, settledYTD }) => (
-                        <tr key={a.id}>
-                          <td className="py-2 pr-2">
-                            <div className="flex items-center gap-2">
-                              <img src={a.avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover" />
-                              <span className="font-medium text-gray-900 dark:text-white">{a.name}</span>
-                            </div>
-                          </td>
-                          <td className="py-2 px-2 text-right">{activeDeals}</td>
-                          <td className="py-2 px-2 text-right">{formatCurrency(pipelineValue)}</td>
-                          <td className="py-2 px-2 text-right">{formatCurrency(advisorPerfFilter === 'this_month' ? settledThisMonth : settledYTD)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className={cardClass}>
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Recent Activity
-              </h3>
-              {loading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3].map((i) => (
-                    <div key={i} className="flex gap-3">
-                      <div className="h-9 w-9 rounded-full bg-gray-200 dark:bg-gray-600 animate-pulse flex-shrink-0" />
-                      <div className="flex-1 h-12 bg-gray-100 dark:bg-gray-700 rounded animate-pulse" />
-                    </div>
-                  ))}
-                </div>
-              ) : recentNotes.length === 0 ? (
-                <p className="text-sm text-gray-500 dark:text-gray-400">No recent activity.</p>
-              ) : (
-                <ul className="divide-y divide-gray-100 dark:divide-gray-700">
-                  {recentNotes.map((note) => (
-                    <li key={note.id} className="flex gap-3 py-3 first:pt-0 last:pb-0">
-                      <div className="flex-shrink-0 w-9 h-9 rounded-full bg-[#dbeafe] dark:bg-blue-900/40 flex items-center justify-center text-xs font-medium text-[#2563eb] dark:text-blue-300">
-                        {(note.authorName || '?').slice(0, 2).toUpperCase()}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 dark:text-white">{note.authorName}</p>
-                        <p className="text-sm text-gray-600 dark:text-gray-400 truncate">
-                          {(note.content || '').slice(0, 60)}
-                          {(note.content || '').length > 60 ? '…' : ''}
-                        </p>
-                        <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{timeAgo(note.createdAt)}</p>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-        </div>
       </div>
 
-      {/* ROW 4 — Donut, Bar, Quick Actions */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className={cardClass}>
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-            Applications by Stage
-          </h3>
-          {loading ? (
-            <div className="h-64 flex items-center justify-center bg-gray-50 dark:bg-gray-700/50 rounded-lg animate-pulse" />
-          ) : donutData.length === 0 ? (
-            <div className="h-64 flex items-center justify-center text-sm text-gray-500 dark:text-gray-400">
-              No data
-            </div>
-          ) : (
-            <>
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={donutData}
-                      cx="50%"
-                      cy="45%"
-                      innerRadius={56}
-                      outerRadius={80}
-                      paddingAngle={2}
-                      dataKey="value"
-                      nameKey="name"
-                    >
-                      {donutData.map((_, i) => (
-                        <Cell key={i} fill={PASTEL_CHART_COLORS[i % PASTEL_CHART_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                    <Legend layout="horizontal" align="center" wrapperStyle={{ fontSize: '12px' }} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            </>
-          )}
-        </div>
-        <div className={cardClass}>
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-            Monthly Settled Loans
-          </h3>
-          {loading ? (
-            <div className="h-64 bg-gray-50 dark:bg-gray-700/50 rounded-lg animate-pulse" />
-          ) : (
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={monthlySettledData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
-                  <YAxis
-                    tick={{ fontSize: 12 }}
-                    axisLine={false}
-                    tickLine={false}
-                    tickFormatter={(v) => (v >= 1e6 ? `${v / 1e6}M` : v >= 1e3 ? `${v / 1e3}K` : v)}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'rgba(255,255,255,0.95)',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '8px',
-                    }}
-                    formatter={(value: number) => [formatCurrency(value), 'Settled']}
-                  />
-                  <Bar dataKey="value" fill={PASTEL.blue.text} radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
-        <div className={cardClass}>
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Quick Actions</h3>
-          <div className="space-y-3">
-            <button
-              type="button"
-              onClick={() => setCurrentView('applications')}
-              className="w-full py-3 px-4 rounded-lg text-sm font-medium transition-colors hover:opacity-90"
-              style={{ backgroundColor: PASTEL.blue.bg, color: PASTEL.blue.text }}
+      {/* ROW 5 — Active Applications full-width table */}
+      <div className={cardClass}>
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Active Applications</h3>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="search"
+              placeholder="Search by client name..."
+              value={activeAppsSearch}
+              onChange={(e) => { setActiveAppsSearch(e.target.value); setActiveAppsPage(1); }}
+              className="px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 w-48"
+            />
+            <select
+              value={activeAppsStageFilter}
+              onChange={(e) => { setActiveAppsStageFilter(e.target.value); setActiveAppsPage(1); }}
+              className="px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700"
             >
-              + New Application
-            </button>
-            <button
-              type="button"
-              onClick={() => setCurrentView('clients')}
-              className="w-full py-3 px-4 rounded-lg text-sm font-medium border-2 transition-colors hover:opacity-90"
-              style={{ borderColor: PASTEL.blue.text, color: PASTEL.blue.text }}
-            >
-              + New Client
-            </button>
-            <button
-              type="button"
-              onClick={() => setCurrentView('tasks')}
-              className="w-full py-3 px-4 rounded-lg text-sm font-medium border-2 transition-colors hover:opacity-90"
-              style={{ borderColor: PASTEL.blue.text, color: PASTEL.blue.text }}
-            >
-              + Add Task
-            </button>
-            <button
-              type="button"
-              onClick={() => setCurrentView('dashboard')}
-              className="w-full py-3 px-4 rounded-lg text-sm font-medium border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
-            >
-              📊 View Reports
-            </button>
+              <option value="all">All stages</option>
+              {ALL_STAGES.map((s) => (
+                <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+              ))}
+            </select>
           </div>
         </div>
+        {loading ? (
+          <div className="h-64 bg-gray-100 dark:bg-gray-700 rounded-lg animate-pulse" />
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left text-gray-700 dark:text-gray-300">
+                <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-600">
+                  <tr>
+                    <th className="py-2 pr-2">Reference</th>
+                    <th className="py-2 px-2">Client Name</th>
+                    <th className="py-2 px-2">Loan Amount</th>
+                    <th className="py-2 px-2">Type</th>
+                    <th className="py-2 px-2">Stage</th>
+                    <th className="py-2 px-2">Assigned To</th>
+                    <th className="py-2 px-2">Days Active</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                  {activeApplicationsPaginated.map((app) => {
+                    const stage = workflowKey(app);
+                    const pill = STAGE_PASTEL[stage] || { bg: '#dbeafe', text: '#2563eb' };
+                    return (
+                      <tr
+                        key={app.id}
+                        onClick={() => navigateToApplication(app.id)}
+                        className="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+                      >
+                        <td className="py-2 pr-2 font-medium text-gray-900 dark:text-white">{app.referenceNumber || '—'}</td>
+                        <td className="py-2 px-2">{app.clientName}</td>
+                        <td className="py-2 px-2">{app.loanAmount ? formatCurrency(app.loanAmount) : '—'}</td>
+                        <td className="py-2 px-2 text-gray-500 dark:text-gray-400">—</td>
+                        <td className="py-2 px-2">
+                          <span className="px-2 py-0.5 text-xs font-medium rounded-full" style={{ backgroundColor: pill.bg, color: pill.text }}>
+                            {stage.charAt(0).toUpperCase() + stage.slice(1)}
+                          </span>
+                        </td>
+                        <td className="py-2 px-2">{advisorNamesById[app.advisorId] || '—'}</td>
+                        <td className="py-2 px-2">{daysInStage(app)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {activeApplicationsFiltered.length === 0 && (
+              <p className="py-6 text-center text-gray-500 dark:text-gray-400">No active applications.</p>
+            )}
+            {activeAppsTotalPages > 1 && (
+              <div className="flex items-center justify-between pt-4 border-t border-gray-200 dark:border-gray-600 mt-4">
+                <span className="text-sm text-gray-500 dark:text-gray-400">
+                  Page {activeAppsPage} of {activeAppsTotalPages} ({activeApplicationsFiltered.length} total)
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setActiveAppsPage((p) => Math.max(1, p - 1))}
+                    disabled={activeAppsPage <= 1}
+                    className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-600 disabled:opacity-50"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveAppsPage((p) => Math.min(activeAppsTotalPages, p + 1))}
+                    disabled={activeAppsPage >= activeAppsTotalPages}
+                    className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-600 disabled:opacity-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
       </div>
     </div>
