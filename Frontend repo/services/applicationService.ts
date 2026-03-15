@@ -277,6 +277,56 @@ export const applicationService = {
     if (error) throw error;
   },
 
+  getDocuments: async (applicationId: string) => {
+    const { data, error } = await supabase
+      .from('documents')
+      .select('*')
+      .eq('application_id', applicationId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+  uploadDocument: async (
+    applicationId: string,
+    clientId: string,
+    firmId: string,
+    file: File,
+    category: string
+  ) => {
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${firmId}/${clientId}/${applicationId}/${Date.now()}.${fileExt}`;
+    const { error: uploadError } = await supabase.storage.from('documents').upload(fileName, file);
+    if (uploadError) throw uploadError;
+    const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
+    const { data, error } = await supabase
+      .from('documents')
+      .insert([
+        {
+          application_id: applicationId,
+          client_id: clientId,
+          firm_id: firmId,
+          name: file.name,
+          category,
+          url: urlData.publicUrl,
+          upload_date: new Date().toISOString().split('T')[0],
+          status: 'Valid',
+        },
+      ])
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  },
+  deleteDocument: async (id: string, url: string) => {
+    const split = url.split('/documents/');
+    if (split.length > 1) {
+      const path = split[1];
+      await supabase.storage.from('documents').remove([path]);
+    }
+    const { error } = await supabase.from('documents').delete().eq('id', id);
+    if (error) throw error;
+  },
+
   getCompanies: async (applicationId: string) => {
     const { data, error } = await supabase.from('companies').select('*').eq('application_id', applicationId);
     if (error) throw error;

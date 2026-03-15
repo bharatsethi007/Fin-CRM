@@ -157,6 +157,14 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
   const [propertyAddressEdit, setPropertyAddressEdit] = useState<string>('');
   const [propertyValueEdit, setPropertyValueEdit] = useState<string>('');
 
+  const [financials, setFinancials] = useState({
+    income: client.financials?.income ?? 0,
+    expenses: client.financials?.expenses ?? 0,
+    assets: client.financials?.assets ?? 0,
+    liabilities: client.financials?.liabilities ?? 0,
+    netPosition: (client.financials?.assets ?? 0) - (client.financials?.liabilities ?? 0),
+  });
+
   const [applicants, setApplicants] = useState<Applicant[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [applicantsLoading, setApplicantsLoading] = useState(false);
@@ -282,6 +290,73 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
     }
   }, [activeTab, application.id]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadFinancials = async () => {
+      try {
+        const applicantsData = await applicationService.getApplicants(application.id);
+        const incomeLists = await Promise.all(
+          (applicantsData || []).map((a) => applicationService.getIncome(a.id))
+        );
+        let totalIncome = 0;
+        incomeLists.forEach((list) => {
+          (list || []).forEach((inc: any) => {
+            totalIncome += Number(inc.annual_gross_total) || 0;
+          });
+        });
+
+        const expensesData = await applicationService.getExpenses(application.id);
+        const totalExpensesMonthly = (expensesData || []).reduce(
+          (sum: number, e: any) => sum + (Number(e.total_monthly) || 0),
+          0
+        );
+        const totalExpensesAnnual = totalExpensesMonthly * 12;
+
+        const assetsData = await applicationService.getAssets(application.id);
+        const totalAssets = (assetsData || []).reduce((sum: number, a: any) => {
+          const parts = [
+            a.estimated_value,
+            a.property_value,
+            a.vehicle_value,
+            a.account_balance,
+            a.kiwisaver_balance,
+            a.investment_value,
+            a.other_value,
+          ];
+          return (
+            sum +
+            parts.reduce((s, v) => s + (v != null ? Number(v) || 0 : 0), 0)
+          );
+        }, 0);
+
+        const liabilitiesData = await applicationService.getLiabilities(application.id);
+        const totalLiabilities = (liabilitiesData || []).reduce(
+          (sum: number, l: any) => sum + (Number(l.current_balance) || 0),
+          0
+        );
+
+        const netPosition = totalAssets - totalLiabilities;
+
+        if (!cancelled) {
+          setFinancials({
+            income: totalIncome,
+            expenses: totalExpensesAnnual,
+            assets: totalAssets,
+            liabilities: totalLiabilities,
+            netPosition,
+          });
+        }
+      } catch (err) {
+        console.error('Failed to compute financial summary:', err);
+      }
+    };
+
+    loadFinancials();
+    return () => {
+      cancelled = true;
+    };
+  }, [application.id]);
+
   const [assets, setAssets] = useState<Asset[]>([]);
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [showAssetModal, setShowAssetModal] = useState(false);
@@ -315,6 +390,25 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
         .then((data) => setLiabilities(data || []))
         .catch(() => setLiabilities([]))
         .finally(() => setLiabilitiesLoading(false));
+    }
+  }, [activeTab, application.id]);
+
+  const [documents, setDocuments] = useState<any[]>([]);
+  const [documentsLoading, setDocumentsLoading] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadingDocument, setUploadingDocument] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadCategory, setUploadCategory] = useState<string>('01 Fact Find');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+
+  useEffect(() => {
+    if (activeTab === 'documents' && application.id) {
+      setDocumentsLoading(true);
+      applicationService
+        .getDocuments(application.id)
+        .then((data) => setDocuments(data || []))
+        .catch(() => setDocuments([]))
+        .finally(() => setDocumentsLoading(false));
     }
   }, [activeTab, application.id]);
 
@@ -1301,6 +1395,68 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
     }
   };
 
+  const handleUploadDocumentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!uploadFile) {
+      setUploadError('Please choose a file to upload.');
+      return;
+    }
+    setUploadingDocument(true);
+    setUploadError(null);
+    try {
+      const firmId =
+        (detail as any)?.firm_id ??
+        (detail as any)?.firmId ??
+        application.firmId ??
+        (application as any).firm_id ??
+        client.firmId ??
+        '';
+      const clientId =
+        (detail as any)?.client_id ??
+        application.clientId ??
+        (application as any).client_id ??
+        client.id;
+      if (!firmId) {
+        setUploadError('Firm ID is missing. Please ensure the application and client are linked to a firm.');
+        setUploadingDocument(false);
+        return;
+      }
+      const doc = await applicationService.uploadDocument(
+        application.id,
+        clientId,
+        firmId,
+        uploadFile,
+        uploadCategory
+      );
+      setDocuments((prev) => [doc, ...prev]);
+      setShowUploadModal(false);
+      setUploadFile(null);
+      setUploadCategory('01 Fact Find');
+      setToastMessage('Document uploaded');
+    } catch (err) {
+      const msg =
+        err && typeof err === 'object' && 'message' in err
+          ? String((err as { message?: string }).message)
+          : err instanceof Error
+            ? err.message
+            : 'Failed to upload document.';
+      setUploadError(msg);
+    } finally {
+      setUploadingDocument(false);
+    }
+  };
+
+  const handleDeleteDocument = async (id: string, url: string) => {
+    if (!window.confirm('Are you sure you want to delete this document?')) return;
+    try {
+      await applicationService.deleteDocument(id, url);
+      setDocuments((prev) => prev.filter((d) => d.id !== id));
+      setToastMessage('Document deleted');
+    } catch (err) {
+      setToastMessage(err instanceof Error ? err.message : 'Failed to delete document');
+    }
+  };
+
   const handleImportFromClient = () => {
     const first = detail?.clients?.first_name ?? client.name?.trim().split(/\s+/)[0] ?? '';
     const last = detail?.clients?.last_name ?? client.name?.trim().split(/\s+/).slice(1).join(' ') ?? '';
@@ -1485,14 +1641,6 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
       ? `${((loanAmountNum / propertyValueNum) * 100).toFixed(1)}%`
       : '—';
 
-  const financials = client.financials ?? {
-    income: 0,
-    expenses: 0,
-    assets: 0,
-    liabilities: 0,
-    otherBorrowings: 0,
-  };
-
   const renderOverview = () => {
     if (loading) {
       return (
@@ -1636,19 +1784,39 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-gray-600 dark:text-gray-400">Total income</span>
-                  <span className="font-medium text-gray-900 dark:text-white">${(financials.income ?? 0).toLocaleString()}</span>
+                  <span className="font-medium text-gray-900 dark:text-white">
+                    ${financials.income.toLocaleString()}
+                  </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600 dark:text-gray-400">Total expenses</span>
-                  <span className="font-medium text-gray-900 dark:text-white">${(financials.expenses ?? 0).toLocaleString()}</span>
+                  <span className="text-gray-600 dark:text-gray-400">Total expenses (annual)</span>
+                  <span className="font-medium text-gray-900 dark:text-white">
+                    ${financials.expenses.toLocaleString()}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600 dark:text-gray-400">Total assets</span>
-                  <span className="font-medium text-gray-900 dark:text-white">${(financials.assets ?? 0).toLocaleString()}</span>
+                  <span className="font-medium text-gray-900 dark:text-white">
+                    ${financials.assets.toLocaleString()}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600 dark:text-gray-400">Total liabilities</span>
-                  <span className="font-medium text-gray-900 dark:text-white">${(financials.liabilities ?? 0).toLocaleString()}</span>
+                  <span className="font-medium text-gray-900 dark:text-white">
+                    ${financials.liabilities.toLocaleString()}
+                  </span>
+                </div>
+                <div className="flex justify-between pt-2 border-t border-gray-200 dark:border-gray-700 mt-2">
+                  <span className="text-gray-700 dark:text-gray-300 font-semibold">Net position</span>
+                  <span
+                    className={`font-semibold ${
+                      financials.netPosition >= 0
+                        ? 'text-green-600 dark:text-green-400'
+                        : 'text-red-600 dark:text-red-400'
+                    }`}
+                  >
+                    ${financials.netPosition.toLocaleString()}
+                  </span>
                 </div>
               </div>
             </Card>
@@ -4438,6 +4606,212 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
     );
   };
 
+  const DOCUMENT_CATEGORIES_APP = [
+    '01 Fact Find',
+    '02 Financial Evidence',
+    '03 Property Documents',
+    '04 Lender Application',
+    '05 Compliance',
+    '06 Insurance',
+    '07 Settlement',
+    '08 Ongoing Reviews',
+    'ID',
+    'Financial',
+    'Other',
+  ] as const;
+
+  const renderDocumentsTab = () => {
+    if (documentsLoading) {
+      return (
+        <div className="flex justify-center items-center py-24">
+          <Icon name="Loader" className="h-10 w-10 animate-spin text-primary-500 dark:text-primary-400" />
+        </div>
+      );
+    }
+
+    const totalDocuments = documents.length;
+    const byCategory: Record<string, number> = {};
+    documents.forEach((d: { category?: string }) => {
+      const cat = d.category || 'Uncategorised';
+      byCategory[cat] = (byCategory[cat] || 0) + 1;
+    });
+
+    const grouped: Record<string, { id: string; name?: string; category?: string; upload_date?: string; uploadDate?: string; status?: string; url?: string }[]> = {};
+    documents.forEach((d) => {
+      const cat = d.category || 'Uncategorised';
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(d);
+    });
+
+    const statusClasses = (status: string | null | undefined) => {
+      switch (status) {
+        case 'Expiring Soon':
+          return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200';
+        case 'Expired':
+          return 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200';
+        case 'Valid':
+        default:
+          return 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200';
+      }
+    };
+
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Documents</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Total: {totalDocuments} document{totalDocuments === 1 ? '' : 's'}
+              {Object.keys(byCategory).length > 0 &&
+                ` · ${Object.entries(byCategory)
+                  .map(([cat, count]) => `${cat}: ${count}`)
+                  .join(', ')}`}
+            </p>
+          </div>
+          <Button
+            leftIcon="Upload"
+            type="button"
+            onClick={() => {
+              setShowUploadModal(true);
+              setUploadError(null);
+            }}
+          >
+            Upload Document
+          </Button>
+        </div>
+
+        {totalDocuments === 0 ? (
+          <Card className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 py-12 text-center">
+            <p className="text-gray-500 dark:text-gray-400">
+              No documents uploaded yet. Click &quot;Upload Document&quot; to add one.
+            </p>
+          </Card>
+        ) : (
+          Object.keys(grouped)
+            .sort()
+            .map((category) => (
+              <Card
+                key={category}
+                className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700"
+              >
+                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white">{category}</h4>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                    {grouped[category].length} document{grouped[category].length === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <div className="divide-y divide-gray-200 dark:divide-gray-700">
+                  {grouped[category].map((doc) => (
+                    <div
+                      key={doc.id}
+                      className="flex items-center justify-between px-4 py-3 text-sm bg-white dark:bg-gray-800 last:rounded-b-lg"
+                    >
+                      <div className="flex items-center gap-3">
+                        <Icon name="FileText" className="h-4 w-4 text-gray-400 dark:text-gray-500" />
+                        <div>
+                          <p className="font-medium text-gray-900 dark:text-white">{doc.name}</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            Uploaded {doc.upload_date || doc.uploadDate || '—'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusClasses(doc.status)}`}
+                        >
+                          {doc.status || 'Valid'}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          leftIcon="Trash2"
+                          onClick={() => handleDeleteDocument(doc.id, doc.url || '')}
+                        >
+                          Delete
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            ))
+        )}
+
+        {showUploadModal && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col border border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Upload Document</h3>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowUploadModal(false);
+                    setUploadFile(null);
+                    setUploadError(null);
+                    setUploadCategory('01 Fact Find');
+                  }}
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                >
+                  <Icon name="X" className="h-5 w-5" />
+                </button>
+              </div>
+              <form onSubmit={handleUploadDocumentSubmit} className="flex flex-col min-h-0">
+                <div className="overflow-y-auto p-4 flex-1 space-y-4">
+                  {uploadError && (
+                    <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-md">
+                      {uploadError}
+                    </p>
+                  )}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">File</label>
+                    <input
+                      type="file"
+                      accept=".pdf,.jpg,.jpeg,.png,.docx,.csv,.xlsx"
+                      onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
+                      className="block w-full text-sm text-gray-700 dark:text-gray-300 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 dark:file:bg-primary-900/30 dark:file:text-primary-300"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Category</label>
+                    <select
+                      value={uploadCategory}
+                      onChange={(e) => setUploadCategory(e.target.value)}
+                      className={inputClasses}
+                    >
+                      {DOCUMENT_CATEGORIES_APP.map((cat) => (
+                        <option key={cat} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3 flex-shrink-0">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      setShowUploadModal(false);
+                      setUploadFile(null);
+                      setUploadError(null);
+                      setUploadCategory('01 Fact Find');
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button type="submit" isLoading={uploadingDocument}>
+                    Upload
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderTabContent = () => {
     switch (activeTab) {
       case 'overview':
@@ -4453,7 +4827,7 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
       case 'liabilities':
         return renderLiabilitiesTab();
       case 'documents':
-        return <ComingSoonPlaceholder tabName="Documents" />;
+        return renderDocumentsTab();
       default:
         return null;
     }

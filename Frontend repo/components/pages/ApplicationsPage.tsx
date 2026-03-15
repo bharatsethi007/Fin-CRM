@@ -10,6 +10,7 @@ import { ApplicationDetailPage } from './ApplicationDetailPage';
 
 type AppRow = {
   id: string;
+  firm_id?: string | null;
   reference_number?: string | null;
   client_id: string;
   loan_amount?: number | null;
@@ -66,7 +67,7 @@ export default function ApplicationsPage() {
 
   const rowToApplication = (row: AppRow): Application => ({
     id: row.id,
-    firmId: '',
+    firmId: row.firm_id || '',
     referenceNumber: row.reference_number || '',
     clientName: clientName(row),
     clientId: row.client_id,
