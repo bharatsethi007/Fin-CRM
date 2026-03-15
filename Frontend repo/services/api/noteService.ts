@@ -39,28 +39,69 @@ export const noteService = {
   },
 
   /**
+   * Fetch notes for a single application (most recent first).
+   */
+  getApplicationNotes: async (applicationId: string): Promise<Note[]> => {
+    const { data, error } = await supabase
+      .from('notes')
+      .select('*')
+      .eq('application_id', applicationId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return (data || []).map((n: Record<string, unknown>) => ({
+      id: n.id as string,
+      firmId: n.firm_id as string,
+      clientId: n.client_id as string,
+      applicationId: (n.application_id as string) || undefined,
+      content: n.content as string,
+      authorId: (n.author_id as string) || '',
+      authorName: (n.author_name as string) || 'Unknown',
+      authorAvatarUrl: `https://i.pravatar.cc/150?u=${n.author_id}`,
+      createdAt: n.created_at as string,
+    }));
+  },
+
+  /**
    * New createNote API – writes to Supabase notes table.
+   * Requires: firm_id, client_id, content, author_name. application_id optional.
+   * author_id is set to null (logged-in user is in advisors, not users).
    */
   createNote: async (params: {
     content: string;
     clientId: string;
     applicationId?: string;
+    firmId?: string;
+    authorName?: string;
   }): Promise<Note> => {
     const currentFirm = authService.getCurrentFirm();
     const currentUser = authService.getCurrentUser();
-    if (!currentFirm || !currentUser) throw new Error('Not logged in');
+    const firmId = params.firmId ?? currentFirm?.id ?? null;
+    const authorNameRaw = params.authorName ?? currentUser?.name ?? 'Adviser';
+    const authorName = (typeof authorNameRaw === 'string' && authorNameRaw.trim()) ? authorNameRaw.trim() : 'Adviser';
+    if (!firmId) throw new Error('Not logged in or firm ID missing. Provide firmId or log in with a firm.');
+    if (!params.clientId) throw new Error('clientId is required.');
+
+    const insertPayload = {
+      firm_id: firmId,
+      client_id: params.clientId,
+      application_id: params.applicationId ?? null,
+      content: params.content,
+      author_id: null,
+      author_name: authorName,
+      author_avatar_url: currentUser?.avatarUrl ?? null,
+    };
+    console.log('[noteService.createNote] Insert payload (notes table):', {
+      firm_id: insertPayload.firm_id,
+      client_id: insertPayload.client_id,
+      application_id: insertPayload.application_id,
+      author_id: insertPayload.author_id,
+      author_name: insertPayload.author_name,
+      content_preview: insertPayload.content?.slice(0, 80) + (insertPayload.content?.length > 80 ? '...' : ''),
+    });
 
     const { data, error } = await supabase
       .from('notes')
-      .insert([{
-        firm_id: currentFirm.id,
-        client_id: params.clientId,
-        application_id: params.applicationId || null,
-        content: params.content,
-        author_id: null,
-        author_name: currentUser.name,
-        author_avatar_url: currentUser.avatarUrl,
-      }])
+      .insert([insertPayload])
       .select()
       .single();
 

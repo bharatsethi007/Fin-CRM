@@ -247,9 +247,62 @@ const analyzeCompliance = async (text: string): Promise<AIComplianceResult> => {
     }
 };
 
+export type StatementOfAdviceResponse = {
+  recommendation: string;
+  whyThisLender: string;
+  whyNotOthers: string;
+  meetsNeeds: string;
+  risks: string;
+  advisorNotes: string;
+};
+
+const generateStatementOfAdvice = async (sanitisedApplicationData: string): Promise<StatementOfAdviceResponse> => {
+  const ai = getAi();
+  if (!ai) throw new Error('Could not generate summary. Check your Gemini API key is set in .env as VITE_GEMINI_API_KEY');
+  const fullPrompt = `You are a New Zealand mortgage adviser compliance assistant helping prepare a Statement of Advice under the Financial Markets Conduct Act.
+
+Generate a professional advice summary for this mortgage application. Return ONLY valid JSON with no markdown, no backticks, no explanation - just the raw JSON object:
+{
+  "recommendation": "2-3 sentence summary of the loan recommendation",
+  "whyThisLender": "paragraph explaining why this lender suits this applicant profile",
+  "whyNotOthers": "brief notes on 2 alternative NZ lenders considered and why not selected",
+  "meetsNeeds": "paragraph explaining how this recommendation meets the stated loan purpose and client needs",
+  "risks": "3-5 key risks specific to this application type and profile that must be disclosed",
+  "advisorNotes": "any compliance considerations specific to NZ mortgage advice"
+}
+
+Application data (all PII removed): ${sanitisedApplicationData}`;
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: fullPrompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            recommendation: { type: Type.STRING, description: '2-3 sentence summary of the loan recommendation' },
+            whyThisLender: { type: Type.STRING, description: 'Paragraph explaining why this lender suits this applicant profile' },
+            whyNotOthers: { type: Type.STRING, description: 'Brief notes on 2 alternative NZ lenders considered and why not selected' },
+            meetsNeeds: { type: Type.STRING, description: 'How this recommendation meets the stated loan purpose and client needs' },
+            risks: { type: Type.STRING, description: '3-5 key risks specific to this application that must be disclosed' },
+            advisorNotes: { type: Type.STRING, description: 'Compliance considerations specific to NZ mortgage advice' },
+          },
+          required: ['recommendation', 'whyThisLender', 'whyNotOthers', 'meetsNeeds', 'risks', 'advisorNotes'],
+        },
+      },
+    });
+    return JSON.parse(response.text) as StatementOfAdviceResponse;
+  } catch (error) {
+    console.error('Error calling Gemini API for statement of advice:', error);
+    throw new Error('Could not generate summary. Check your Gemini API key is set in .env as VITE_GEMINI_API_KEY');
+  }
+};
+
 export const geminiService = {
   getDashboardInsights,
   getLenderRecommendation,
   summarizeAndExtractActions,
   analyzeCompliance,
+  generateStatementOfAdvice,
 };

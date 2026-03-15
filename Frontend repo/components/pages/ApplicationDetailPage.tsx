@@ -6,8 +6,8 @@ import { Button } from '../common/Button';
 import { Icon, IconName } from '../common/Icon';
 import { Card } from '../common/Card';
 import { applicationService, type Applicant, type Company, type Income, type Expense, type Asset, type Liability } from '../../services/applicationService';
-import { crmService } from '../../services/api';
-import { geminiService } from '../../services/geminiService';
+import { crmService, noteService, authService } from '../../services/api';
+import { geminiService, type StatementOfAdviceResponse } from '../../services/geminiService';
 
 type ApplicationDetailRow = {
   id: string;
@@ -401,6 +401,16 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
   const [uploadCategory, setUploadCategory] = useState<string>('01 Fact Find');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
 
+  const [adviceSummaryLoading, setAdviceSummaryLoading] = useState(false);
+  const [adviceSummaryError, setAdviceSummaryError] = useState<string | null>(null);
+  const [showAdviceReviewModal, setShowAdviceReviewModal] = useState(false);
+  const [adviceReview, setAdviceReview] = useState<StatementOfAdviceResponse | null>(null);
+
+  const [applicationNotes, setApplicationNotes] = useState<{ id: string; authorName: string; createdAt: string; content: string }[]>([]);
+  const [applicationNotesLoading, setApplicationNotesLoading] = useState(false);
+  const [newNoteText, setNewNoteText] = useState('');
+  const [addingNote, setAddingNote] = useState(false);
+
   useEffect(() => {
     if (activeTab === 'documents' && application.id) {
       setDocumentsLoading(true);
@@ -409,6 +419,17 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
         .then((data) => setDocuments(data || []))
         .catch(() => setDocuments([]))
         .finally(() => setDocumentsLoading(false));
+    }
+  }, [activeTab, application.id]);
+
+  useEffect(() => {
+    if (activeTab === 'overview' && application.id) {
+      setApplicationNotesLoading(true);
+      noteService
+        .getApplicationNotes(application.id)
+        .then((notes) => setApplicationNotes(notes))
+        .catch(() => setApplicationNotes([]))
+        .finally(() => setApplicationNotesLoading(false));
     }
   }, [activeTab, application.id]);
 
@@ -1457,6 +1478,177 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
     }
   };
 
+  const getSanitisedDataForAdvice = (): string => {
+    const loanAmountNum = Number(loanAmountEdit) || 0;
+    const propertyValueNum = Number(propertyValueEdit) || 0;
+    const lvrPct =
+      propertyValueNum > 0 && loanAmountNum > 0
+        ? `${((loanAmountNum / propertyValueNum) * 100).toFixed(1)}%`
+        : '—';
+    const addr = (propertyAddressEdit || '').trim();
+    const propertySuburbRegion = addr.includes(',')
+      ? addr.split(',').slice(1).join(',').trim() || '[area only]'
+      : addr ? '[suburb/region only]' : '—';
+    const applicantLabels = applicants.length >= 2
+      ? ['APPLICANT_1', 'APPLICANT_2']
+      : ['APPLICANT_1'];
+    const payload = {
+      applicants: applicantLabels,
+      loan_amount: loanAmountNum,
+      loan_type: applicationTypeEdit,
+      loan_purpose: loanPurposeEdit,
+      loan_term_years: Number(loanTermYearsEdit) || undefined,
+      property_value: propertyValueNum,
+      lvr: lvrPct,
+      income_total: financials.income,
+      expense_total: financials.expenses,
+      asset_total: financials.assets,
+      liability_total: financials.liabilities,
+      lender_name: lenderNameEdit,
+      workflow_stage: workflowStage,
+      property_suburb_region: propertySuburbRegion,
+    };
+    return JSON.stringify(payload, null, 2);
+  };
+
+  const handleGenerateAdviceSummary = async () => {
+    setAdviceSummaryLoading(true);
+    setAdviceSummaryError(null);
+    try {
+      const sanitised = getSanitisedDataForAdvice();
+      const result = await geminiService.generateStatementOfAdvice(sanitised);
+      setAdviceReview({ ...result });
+      setShowAdviceReviewModal(true);
+    } catch (err) {
+      setAdviceSummaryError(
+        err instanceof Error ? err.message : 'Could not generate summary. Check your Gemini API key is set in .env as VITE_GEMINI_API_KEY'
+      );
+    } finally {
+      setAdviceSummaryLoading(false);
+    }
+  };
+
+  const handleApproveAdviceSave = async () => {
+    if (!adviceReview) return;
+    const currentUser = authService.getCurrentUser();
+    const adviserName = currentUser?.name ?? 'Adviser';
+    const dateStr = new Date().toLocaleDateString(undefined, { dateStyle: 'long' });
+    const fullFormatted = [
+      '--- Statement of Advice ---',
+      '',
+      'Loan Recommendation',
+      adviceReview.recommendation,
+      '',
+      'Why This Lender',
+      adviceReview.whyThisLender,
+      '',
+      'Why Not Other Lenders',
+      adviceReview.whyNotOthers,
+      '',
+      'How This Meets Client Needs',
+      adviceReview.meetsNeeds,
+      '',
+      'Risks to Disclose',
+      adviceReview.risks,
+      '',
+      'Adviser Notes',
+      adviceReview.advisorNotes,
+      '',
+      `Prepared by: ${adviserName}`,
+      `Date: ${dateStr}`,
+      '',
+      'This summary was AI-assisted and has been reviewed and approved by the adviser.',
+    ].join('\n');
+
+    const firmId =
+      (detail as any)?.firm_id ??
+      (detail as any)?.firmId ??
+      application.firmId ??
+      (application as any).firm_id ??
+      client.firmId ??
+      '';
+    const clientId =
+      (detail as any)?.client_id ??
+      application.clientId ??
+      (application as any).client_id ??
+      client.id;
+
+    const authorNameForNote = (typeof adviserName === 'string' && adviserName.trim()) ? adviserName.trim() : 'Adviser';
+    const payload = {
+      firm_id: firmId || null,
+      client_id: clientId,
+      application_id: application.id || null,
+      content: fullFormatted,
+      author_id: null,
+      author_name: authorNameForNote,
+    };
+    console.log('[Advice Summary] Notes insert payload:', payload);
+
+    if (!firmId) {
+      setToastMessage('Cannot save: firm ID is missing. Ensure the application is linked to a firm.');
+      return;
+    }
+
+    try {
+      await noteService.createNote({
+        content: fullFormatted,
+        clientId,
+        applicationId: application.id,
+        firmId,
+        authorName: authorNameForNote,
+      });
+      setToastMessage('Advice summary saved to application notes');
+      setShowAdviceReviewModal(false);
+      setAdviceReview(null);
+      applicationService.getApplicationById(application.id).then((data) => {
+        setDetail(data as ApplicationDetailRow);
+      });
+      noteService.getApplicationNotes(application.id).then(setApplicationNotes);
+    } catch (err) {
+      setToastMessage(err instanceof Error ? err.message : 'Failed to save note');
+    }
+  };
+
+  const handleAddNote = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const content = newNoteText.trim();
+    if (!content) return;
+    const firmId =
+      (detail as any)?.firm_id ??
+      (detail as any)?.firmId ??
+      application.firmId ??
+      (application as any).firm_id ??
+      client.firmId ??
+      '';
+    const clientId =
+      (detail as any)?.client_id ??
+      application.clientId ??
+      (application as any).client_id ??
+      client.id;
+    if (!firmId) {
+      setToastMessage('Cannot add note: firm ID is missing.');
+      return;
+    }
+    setAddingNote(true);
+    try {
+      await noteService.createNote({
+        content,
+        clientId,
+        applicationId: application.id,
+        firmId,
+        authorName: authService.getCurrentUser()?.name ?? 'Adviser',
+      });
+      setNewNoteText('');
+      setToastMessage('Note added');
+      const notes = await noteService.getApplicationNotes(application.id);
+      setApplicationNotes(notes);
+    } catch (err) {
+      setToastMessage(err instanceof Error ? err.message : 'Failed to add note');
+    } finally {
+      setAddingNote(false);
+    }
+  };
+
   const handleImportFromClient = () => {
     const first = detail?.clients?.first_name ?? client.name?.trim().split(/\s+/)[0] ?? '';
     const last = detail?.clients?.last_name ?? client.name?.trim().split(/\s+/).slice(1).join(' ') ?? '';
@@ -1753,9 +1945,32 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
                   <p className="text-sm font-medium text-gray-900 dark:text-gray-100 py-2">{lvr}</p>
                 </div>
               </div>
-              <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+              <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 flex flex-wrap items-center gap-3">
                 <Button onClick={handleSaveLendingDetails} isLoading={savingLending}>Save Changes</Button>
+                <div className={`ai-button-wrapper${adviceSummaryLoading ? ' loading' : ''}`}>
+                  <button
+                    type="button"
+                    className="ai-button-inner bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 rounded-md"
+                    onClick={handleGenerateAdviceSummary}
+                    disabled={adviceSummaryLoading}
+                  >
+                    {adviceSummaryLoading ? (
+                      <>
+                        <Icon name="Loader" className="h-4 w-4 animate-spin flex-shrink-0" />
+                        <span>AI is generating your advice summary...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Icon name="Sparkles" className="h-4 w-4 flex-shrink-0" />
+                        <span>Generate Advice Summary</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
+              {adviceSummaryError && (
+                <p className="mt-4 text-sm text-red-600 dark:text-red-400">{adviceSummaryError}</p>
+              )}
             </Card>
           </div>
 
@@ -1835,6 +2050,47 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
             </Card>
           </div>
         </div>
+
+        {/* Application Notes */}
+        <Card className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Notes</h3>
+          {applicationNotesLoading ? (
+            <div className="flex items-center gap-2 py-6 text-gray-500 dark:text-gray-400">
+              <Icon name="Loader" className="h-5 w-5 animate-spin" />
+              <span className="text-sm">Loading notes...</span>
+            </div>
+          ) : applicationNotes.length === 0 ? (
+            <p className="text-sm text-gray-500 dark:text-gray-400 py-4">No notes yet. Add one below.</p>
+          ) : (
+            <div className="space-y-4 mb-6">
+              {applicationNotes.map((note) => (
+                <div
+                  key={note.id}
+                  className="rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/50 p-4"
+                >
+                  <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 mb-2">
+                    <span className="font-medium text-gray-900 dark:text-white">{note.authorName}</span>
+                    <span>·</span>
+                    <span>{note.createdAt ? new Date(note.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—'}</span>
+                  </div>
+                  <div className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{note.content}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          <form onSubmit={handleAddNote} className="space-y-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <textarea
+              value={newNoteText}
+              onChange={(e) => setNewNoteText(e.target.value)}
+              placeholder="Add a note..."
+              rows={3}
+              className={inputClasses}
+            />
+            <Button type="submit" disabled={addingNote || !newNoteText.trim()} isLoading={addingNote}>
+              Add Note
+            </Button>
+          </form>
+        </Card>
 
         {/* NZ Interest Rates Table */}
         <Card className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
@@ -4837,6 +5093,53 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
 
   return (
     <div className="text-gray-900 dark:text-gray-100">
+      <style dangerouslySetInnerHTML={{ __html: `
+        @keyframes rotateBorder {
+          0% { background-position: 0% 50%; }
+          50% { background-position: 100% 50%; }
+          100% { background-position: 0% 50%; }
+        }
+        .ai-button-wrapper {
+          padding: 2px;
+          border-radius: 10px;
+          background: linear-gradient(270deg, #7c3aed, #2563eb, #06b6d4, #7c3aed);
+          background-size: 300% 300%;
+          animation: rotateBorder 3s ease infinite;
+          display: inline-block;
+        }
+        .ai-button-wrapper.loading {
+          animation-duration: 6s;
+          background: linear-gradient(270deg, #6b7280, #9ca3af, #d1d5db, #6b7280);
+          background-size: 300% 300%;
+        }
+        .ai-button-inner {
+          border-radius: 8px;
+          padding: 10px 20px;
+          font-weight: 600;
+          color: #7c3aed;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          cursor: pointer;
+          white-space: nowrap;
+          border: none;
+          width: 100%;
+          font-size: 0.875rem;
+          transition: all 0.2s ease;
+        }
+        .ai-button-inner:hover:not(:disabled) {
+          background: transparent !important;
+          color: white;
+        }
+        .ai-button-inner:disabled {
+          cursor: not-allowed;
+          color: #6b7280;
+        }
+        .ai-button-wrapper.loading .ai-button-inner:hover {
+          color: #e5e7eb;
+        }
+      ` }} />
       {/* Top header */}
       <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
         <div className="flex flex-wrap items-center gap-3">
@@ -4880,6 +5183,77 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
           {renderTabContent()}
         </main>
       </Card>
+
+      {/* Advice Summary Review Modal */}
+      {showAdviceReviewModal && adviceReview && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col border border-gray-200 dark:border-gray-700">
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Advice Summary — Review Before Saving</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAdviceReviewModal(false);
+                  setAdviceReview(null);
+                  setAdviceSummaryError(null);
+                }}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                <Icon name="X" className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="overflow-y-auto p-4 flex-1 space-y-4">
+              {[
+                { key: 'recommendation' as const, label: 'Loan Recommendation' },
+                { key: 'whyThisLender' as const, label: 'Why This Lender' },
+                { key: 'whyNotOthers' as const, label: 'Why Not Other Lenders' },
+                { key: 'meetsNeeds' as const, label: 'How This Meets Client Needs' },
+                { key: 'risks' as const, label: 'Risks to Disclose' },
+                { key: 'advisorNotes' as const, label: 'Adviser Notes' },
+              ].map(({ key, label }) => (
+                <div key={key}>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">
+                    {label}
+                  </label>
+                  <textarea
+                    value={adviceReview[key]}
+                    onChange={(e) => setAdviceReview((prev) => (prev ? { ...prev, [key]: e.target.value } : null))}
+                    rows={key === 'recommendation' || key === 'risks' ? 3 : 4}
+                    className={inputClasses}
+                  />
+                </div>
+              ))}
+              <div className="pt-4 border-t border-gray-200 dark:border-gray-700 space-y-1 text-sm text-gray-600 dark:text-gray-400">
+                <p>
+                  <span className="font-medium text-gray-700 dark:text-gray-300">Prepared by</span>{' '}
+                  {authService.getCurrentUser()?.name ?? 'Adviser'}
+                  <span className="font-medium text-gray-700 dark:text-gray-300">, Date</span>{' '}
+                  {new Date().toLocaleDateString(undefined, { dateStyle: 'long' })}
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">
+                  This summary was AI-assisted and has been reviewed and approved by the adviser.
+                </p>
+              </div>
+            </div>
+            <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3 flex-shrink-0">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  setShowAdviceReviewModal(false);
+                  setAdviceReview(null);
+                  setAdviceSummaryError(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button type="button" onClick={handleApproveAdviceSave}>
+                Approve & Save to Notes
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Success / error toast */}
       {toastMessage && (
