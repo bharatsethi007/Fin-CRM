@@ -44,6 +44,8 @@ export interface Client {
   employerName?: string;
   notes?: string;
   dateAdded: string;
+  /** ISO date string from DB for filtering (e.g. "clients created this month") */
+  createdAt?: string;
   advisorId: string;
   avatarUrl: string;
   financials: {

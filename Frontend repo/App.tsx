@@ -85,6 +85,7 @@ const App: React.FC = () => {
     const [currentView, setCurrentView] = useState<string>('dashboard');
     const { isDarkMode, toggleDarkMode } = useDarkMode();
     const [initialClientId, setInitialClientId] = useState<string | null>(null);
+    const [initialApplicationId, setInitialApplicationId] = useState<string | null>(null);
 
     // Auth state
     const [currentAdvisor, setCurrentAdvisor] = useState<Advisor | null>(null);
@@ -158,6 +159,11 @@ const App: React.FC = () => {
         setInitialClientId(clientId);
     };
 
+    const navigateToApplication = (applicationId: string) => {
+        setInitialApplicationId(applicationId);
+        setCurrentView('applications');
+    };
+
     const currentViewTitle = useMemo(() => {
         const viewId = currentView.split(':')[0];
         return findViewName(viewId);
@@ -178,13 +184,25 @@ const App: React.FC = () => {
     const renderView = () => {
         switch (currentView) {
             case 'dashboard':
-                return <Dashboard setCurrentView={setCurrentView} navigateToClient={navigateToClient} advisor={currentAdvisor} />;
+                return (
+                    <Dashboard
+                        setCurrentView={setCurrentView}
+                        navigateToClient={navigateToClient}
+                        navigateToApplication={navigateToApplication}
+                        advisor={currentAdvisor}
+                    />
+                );
             case 'clients':
                 return <ClientList initialClientId={initialClientId} clearInitialClientId={() => setInitialClientId(null)} />;
             case 'leads':
                 return <LeadPipeline />;
             case 'applications':
-                return <ApplicationsPage />;
+                return (
+                    <ApplicationsPage
+                        initialApplicationId={initialApplicationId}
+                        onClearInitialApplicationId={() => setInitialApplicationId(null)}
+                    />
+                );
             case 'tasks':
                 return <TaskList />;
             case 'emails':
@@ -194,7 +212,14 @@ const App: React.FC = () => {
             case 'calls':
                 return <CallsPage />;
             default:
-                return <Dashboard setCurrentView={setCurrentView} navigateToClient={navigateToClient} advisor={currentAdvisor} />;
+                return (
+                    <Dashboard
+                        setCurrentView={setCurrentView}
+                        navigateToClient={navigateToClient}
+                        navigateToApplication={navigateToApplication}
+                        advisor={currentAdvisor}
+                    />
+                );
         }
     };
 

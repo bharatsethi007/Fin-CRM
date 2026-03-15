@@ -37,7 +37,7 @@ function mapRowToApplication(app: any, clientName: string): Application {
         lender: app.lender_name || 'N/A',
         loanAmount: Number(app.loan_amount) || 0,
         status,
-        estSettlementDate: '',
+        estSettlementDate: app.settlement_date ? new Date(app.settlement_date).toISOString().slice(0, 10) : '',
         status_detail: (app.status === 'active' ? 'Active' : 'Needs Attention') as 'Active' | 'Needs Attention' | 'On Hold',
         lastUpdated: app.updated_at || app.created_at || '',
         updatedByName: '',

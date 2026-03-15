@@ -43,7 +43,12 @@ const WorkflowBadge: React.FC<{ stage: string }> = ({ stage }) => {
 
 const APPLICATION_TYPES = ['purchase', 'refinance', 'top-up', 'construction'] as const;
 
-export default function ApplicationsPage() {
+interface ApplicationsPageProps {
+  initialApplicationId?: string | null;
+  onClearInitialApplicationId?: () => void;
+}
+
+export default function ApplicationsPage({ initialApplicationId, onClearInitialApplicationId }: ApplicationsPageProps) {
   const [rows, setRows] = useState<AppRow[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -114,6 +119,11 @@ export default function ApplicationsPage() {
       .then(([apps, clientsData]) => {
         setRows(apps || []);
         setClients(clientsData || []);
+        if (initialApplicationId && (apps || []).length > 0) {
+          const row = (apps || []).find((r: AppRow) => r.id === initialApplicationId);
+          if (row) setSelectedRow(row);
+          onClearInitialApplicationId?.();
+        }
       })
       .catch((err) => console.error('Failed to fetch applications:', err))
       .finally(() => setLoading(false));

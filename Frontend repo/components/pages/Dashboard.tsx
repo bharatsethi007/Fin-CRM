@@ -1,510 +1,862 @@
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, LabelList } from 'recharts';
-import { Card } from '../common/Card';
-import { Icon, IconName } from '../common/Icon';
-import { Button } from '../common/Button';
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  AreaChart,
+  Area,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  CartesianGrid,
+} from 'recharts';
 import { crmService } from '../../services/api';
-import type { Application, BankRates, Advisor } from '../../types';
+import type { Application, Advisor, Task, Client, Note } from '../../types';
 import { ApplicationStatus } from '../../types';
 
+// Pastel palette: background (pastel) + text/border (darker)
+const PASTEL = {
+  blue: { bg: '#dbeafe', text: '#2563eb' },
+  green: { bg: '#dcfce7', text: '#16a34a' },
+  orange: { bg: '#ffedd5', text: '#ea580c' },
+  purple: { bg: '#f3e8ff', text: '#9333ea' },
+  pink: { bg: '#fce7f3', text: '#db2777' },
+  yellow: { bg: '#fef9c3', text: '#ca8a04' },
+} as const;
+
+const STAGE_PASTEL: Record<string, { bg: string; text: string; border: string }> = {
+  draft: { bg: PASTEL.blue.bg, text: PASTEL.blue.text, border: PASTEL.blue.text },
+  submitted: { bg: PASTEL.yellow.bg, text: PASTEL.yellow.text, border: PASTEL.yellow.text },
+  conditional: { bg: PASTEL.orange.bg, text: PASTEL.orange.text, border: PASTEL.orange.text },
+  unconditional: { bg: PASTEL.green.bg, text: PASTEL.green.text, border: PASTEL.green.text },
+  settled: { bg: PASTEL.purple.bg, text: PASTEL.purple.text, border: PASTEL.purple.text },
+  declined: { bg: PASTEL.pink.bg, text: PASTEL.pink.text, border: PASTEL.pink.text },
+};
+
+const PASTEL_CHART_COLORS = [PASTEL.blue.text, PASTEL.yellow.text, PASTEL.orange.text, PASTEL.green.text, PASTEL.purple.text];
 
 interface DashboardProps {
   setCurrentView: (view: string) => void;
   navigateToClient: (clientId: string) => void;
+  navigateToApplication: (applicationId: string) => void;
   advisor: Advisor;
 }
 
-const chartData = [
-  { name: 'Jan', applications: 4 }, { name: 'Feb', applications: 3 }, { name: 'Mar', applications: 5 },
-  { name: 'Apr', applications: 4 }, { name: 'May', applications: 6 }, { name: 'Jun', applications: 7 },
-  { name: 'Jul', applications: 5 }, { name: 'Aug', applications: 8 }, { name: 'Sep', applications: 6 },
-  { name: 'Oct', applications: 9 }, { name: 'Nov', applications: 7 }, { name: 'Dec', applications: 10 },
-];
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
-const StatCard: React.FC<{ icon: any; title: string; value: string; change: string; changeType: 'increase' | 'decrease' }> = ({ icon, title, value, change, changeType }) => (
-  <Card>
-    <div className="flex items-center">
-      <div className={`p-3 rounded-full ${changeType === 'increase' ? 'bg-green-100 dark:bg-green-900' : 'bg-red-100 dark:bg-red-900'}`}>
-        <Icon name={icon} className={`h-6 w-6 ${changeType === 'increase' ? 'text-green-600' : 'text-red-600'}`} />
-      </div>
-      <div className="ml-4">
-        <p className="text-sm text-gray-500 dark:text-gray-400">{title}</p>
-        <p className="text-2xl font-bold text-gray-900 dark:text-white">{value}</p>
-      </div>
-    </div>
-    <p className={`mt-2 text-xs ${changeType === 'increase' ? 'text-green-600' : 'text-red-600'}`}>
-      {change} vs last month
-    </p>
-  </Card>
-);
+function formatCurrency(value: number): string {
+  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}K`;
+  return `$${value.toLocaleString()}`;
+}
 
-const ApplicationStatusBadge: React.FC<{ status: ApplicationStatus }> = ({ status }) => {
-  const statusClasses = {
-    [ApplicationStatus.Draft]: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200',
-    [ApplicationStatus.ApplicationSubmitted]: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-    [ApplicationStatus.ConditionalApproval]: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
-    [ApplicationStatus.UnconditionalApproval]: 'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200',
-    [ApplicationStatus.Settled]: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-    [ApplicationStatus.Declined]: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
-  };
-  return <span className={`px-2 py-1 text-xs font-medium rounded-full ${statusClasses[status]}`}>{status}</span>;
+const timeAgo = (dateString: string): string => {
+  const date = new Date(dateString);
+  const now = new Date();
+  const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+  let interval = seconds / 31536000;
+  if (interval > 1) return Math.floor(interval) + ' years ago';
+  interval = seconds / 2592000;
+  if (interval > 1) return Math.floor(interval) + ' months ago';
+  interval = seconds / 86400;
+  if (interval > 1) return Math.floor(interval) + ' days ago';
+  interval = seconds / 3600;
+  if (interval > 1) return Math.floor(interval) + ' hours ago';
+  interval = seconds / 60;
+  if (interval > 1) return Math.floor(interval) + ' minutes ago';
+  return Math.floor(seconds) + ' seconds ago';
 };
 
-const StatusDetailBadge: React.FC<{ status: 'Active' | 'Needs Attention' | 'On Hold' }> = ({ status }) => {
-    const statusClasses = {
-        'Active': 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-        'Needs Attention': 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
-        'On Hold': 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200',
-    };
-    const dotClasses = {
-        'Active': 'bg-green-500',
-        'Needs Attention': 'bg-yellow-500',
-        'On Hold': 'bg-gray-500',
-    };
-    return (
-        <span className={`inline-flex items-center px-2 py-1 text-xs font-medium rounded-full ${statusClasses[status]}`}>
-            <span className={`w-2 h-2 mr-1.5 rounded-full ${dotClasses[status]}`}></span>
-            {status}
-        </span>
-    );
-};
+function workflowKey(a: Application): string {
+  const s = (a.status as string) || '';
+  const k = s.toLowerCase().replace(/\s+/g, '_');
+  if (k === 'application_submitted') return 'submitted';
+  if (k === 'conditional_approval') return 'conditional';
+  if (k === 'unconditional_approval') return 'unconditional';
+  if (k === 'draft') return 'draft';
+  if (k === 'settled') return 'settled';
+  if (k === 'declined') return 'declined';
+  return k;
+}
 
-const RiskBadge: React.FC<{ risk: Application['riskLevel'] }> = ({ risk }) => {
-    if (!risk) return null;
-    const riskConfig: Record<NonNullable<Application['riskLevel']>, { icon: IconName, color: string, text: string }> = {
-        'Low': { icon: 'ShieldCheck', color: 'text-green-500', text: 'Low risk of delay' },
-        'Medium': { icon: 'ShieldAlert', color: 'text-yellow-500', text: 'Medium risk of delay' },
-        'High': { icon: 'ShieldAlert', color: 'text-red-500', text: 'High risk of delay or decline' },
-    };
-    const config = riskConfig[risk];
-    return (
-        <div className="group relative flex items-center">
-             <Icon name={config.icon} className={`h-5 w-5 ${config.color}`} />
-             <span className="absolute left-1/2 -translate-x-1/2 -top-8 w-max px-2 py-1 bg-gray-700 text-white text-xs rounded-md shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                {config.text}
-            </span>
-        </div>
-    );
-};
+const PIPELINE_BOARD_STAGES = ['draft', 'submitted', 'conditional', 'unconditional', 'settled'] as const;
+const DONUT_STAGES = ['draft', 'submitted', 'conditional', 'unconditional', 'settled'] as const;
 
-const timeAgo = (dateString: string) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
-    let interval = seconds / 31536000;
-    if (interval > 1) return Math.floor(interval) + " years ago";
-    interval = seconds / 2592000;
-    if (interval > 1) return Math.floor(interval) + " months ago";
-    interval = seconds / 86400;
-    if (interval > 1) return Math.floor(interval) + " days ago";
-    interval = seconds / 3600;
-    if (interval > 1) return Math.floor(interval) + " hours ago";
-    interval = seconds / 60;
-    if (interval > 1) return Math.floor(interval) + " minutes ago";
-    return Math.floor(seconds) + " seconds ago";
-};
-
-const WORKFLOW_COLORS = ['#3b82f6', '#f59e0b', '#10b981'];
-const ADVISOR_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#6366f1', '#ec4899', '#f97316'];
-
-const CustomTooltip = ({ active, payload, label }: any) => {
-  if (active && payload && payload.length) {
-    return (
-      <div className="bg-white dark:bg-gray-800 p-3 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700">
-        <p className="text-sm font-semibold text-gray-900 dark:text-white">{label}</p>
-        <p className="text-sm text-primary-600 dark:text-primary-400">{`Applications Settled: ${payload[0].value}`}</p>
-      </div>
-    );
-  }
-  return null;
-};
-
-
-const Dashboard: React.FC<DashboardProps> = ({ setCurrentView, navigateToClient, advisor }) => {
-  const [applications, setApplications] = useState<Application[]>([]);
-  const [interestRates, setInterestRates] = useState<BankRates[]>([]);
-  const [isLoadingApplications, setIsLoadingApplications] = useState(true);
-  const [isLoadingRates, setIsLoadingRates] = useState(true);
-  const [filter, setFilter] = useState<'All' | 'Needs Attention' | 'On Hold' | 'Active'>('All');
-  const [applicationView, setApplicationView] = useState<'my' | 'all'>('all');
-  const [isFilterOpen, setIsFilterOpen] = useState(false);
-  const filterRef = useRef<HTMLDivElement>(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  
-  const fetchRates = () => {
-    setIsLoadingRates(true);
-    crmService.getCurrentInterestRates().then(data => {
-        setInterestRates(data);
-        setIsLoadingRates(false);
+function getMonthKeysLast6(): { key: string; label: string }[] {
+  const out: { key: string; label: string }[] = [];
+  const now = new Date();
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    out.push({
+      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+      label: d.toLocaleDateString('en-NZ', { month: 'short', year: '2-digit' }),
     });
   }
+  return out;
+}
+
+function lastMonthKey(now: Date): string {
+  const y = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+  const m = now.getMonth() === 0 ? 12 : now.getMonth();
+  return `${y}-${String(m).padStart(2, '0')}`;
+}
+
+function pctChange(current: number, previous: number): number | null {
+  if (previous === 0) return current > 0 ? 100 : null;
+  return Math.round(((current - previous) / previous) * 100);
+}
+
+const Dashboard: React.FC<DashboardProps> = ({
+  setCurrentView,
+  navigateToClient,
+  navigateToApplication,
+  advisor,
+}) => {
+  const [viewMode, setViewMode] = useState<'my' | 'firm'>('firm');
+  const [allApplications, setAllApplications] = useState<Application[]>([]);
+  const [allTasks, setAllTasks] = useState<Task[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [advisors, setAdvisors] = useState<Advisor[]>([]);
+  const [recentNotes, setRecentNotes] = useState<Note[]>([]);
+  const [activeAppsSearch, setActiveAppsSearch] = useState('');
+  const [advisorPerfFilter, setAdvisorPerfFilter] = useState<'this_month' | 'ytd'>('this_month');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setIsLoadingApplications(true);
-    setIsLoadingRates(true);
-
-    const fetchApps = crmService.getApplications().then(data => {
-        const openApplications = data.filter(app => 
-            app.status !== ApplicationStatus.Settled && app.status !== ApplicationStatus.Declined
-        );
-        setApplications(openApplications);
-    });
-
-    const fetchInitialRates = crmService.getCurrentInterestRates().then(data => {
-        setInterestRates(data);
-    });
-
-    Promise.all([fetchApps, fetchInitialRates]).finally(() => {
-        setIsLoadingApplications(false);
-        setIsLoadingRates(false);
-    });
+    let cancelled = false;
+    setLoading(true);
+    Promise.all([
+      crmService.getApplications(),
+      crmService.getTasks(),
+      crmService.getClients(),
+      crmService.getAdvisors(),
+      crmService.getNotes(),
+    ])
+      .then(([apps, tasks, clientList, advisorList, notes]) => {
+        if (cancelled) return;
+        setAllApplications(apps || []);
+        setAllTasks(tasks || []);
+        setClients(clientList || []);
+        setAdvisors(advisorList || []);
+        setRecentNotes((notes || []).slice(0, 5));
+      })
+      .catch((err) => console.error('Dashboard load error:', err))
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-        if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
-            setIsFilterOpen(false);
-        }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => {
-        document.removeEventListener("mousedown", handleClickOutside);
+  const viewFilteredApplications = useMemo(() => {
+    if (viewMode === 'my') return allApplications.filter((a) => a.advisorId === advisor.id);
+    return allApplications;
+  }, [allApplications, viewMode, advisor.id]);
+
+  const activeApplications = useMemo(
+    () =>
+      viewFilteredApplications.filter(
+        (a) => a.status !== ApplicationStatus.Settled && a.status !== ApplicationStatus.Declined
+      ),
+    [viewFilteredApplications]
+  );
+
+  const totalPipelineValue = useMemo(
+    () => activeApplications.reduce((s, a) => s + (a.loanAmount || 0), 0),
+    [activeApplications]
+  );
+
+  const now = new Date();
+  const thisMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  const newLeadsThisMonth = useMemo(() => {
+    return clients.filter((c) => {
+      const createdAt = c.createdAt;
+      if (!createdAt) return false;
+      const d = new Date(createdAt);
+      return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    }).length;
+  }, [clients]);
+
+  const todayStr = todayISO();
+  const tasksDueTodayList = useMemo(
+    () => (allTasks || []).filter((t) => t.dueDate === todayStr && !t.isCompleted),
+    [allTasks]
+  );
+  const tasksDueTodayCount = tasksDueTodayList.length;
+
+  const activeApplicationsCount = useMemo(
+    () => viewFilteredApplications.filter((a) => a.status_detail === 'Active').length,
+    [viewFilteredApplications]
+  );
+
+  const settledApplications = useMemo(
+    () => viewFilteredApplications.filter((a) => a.status === ApplicationStatus.Settled),
+    [viewFilteredApplications]
+  );
+  const totalApplicationsCount = viewFilteredApplications.length;
+  const conversionRate =
+    totalApplicationsCount > 0
+      ? ((settledApplications.length / totalApplicationsCount) * 100).toFixed(1)
+      : '0';
+
+  const settledThisMonthCount = useMemo(() => {
+    return settledApplications.filter((a) => {
+      const lu = a.lastUpdated;
+      if (!lu) return false;
+      const d = new Date(lu);
+      return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    }).length;
+  }, [settledApplications]);
+
+  const settledValueThisMonth = useMemo(() => {
+    return settledApplications
+      .filter((a) => {
+        const lu = a.lastUpdated;
+        if (!lu) return false;
+        const d = new Date(lu);
+        return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+      })
+      .reduce((s, a) => s + (a.loanAmount || 0), 0);
+  }, [settledApplications]);
+
+  const lastMonthKeyVal = useMemo(() => lastMonthKey(now), []);
+  const activeApplicationsLastMonth = useMemo(() => {
+    return viewFilteredApplications.filter((a) => {
+      if (a.status === ApplicationStatus.Settled || a.status === ApplicationStatus.Declined) return false;
+      const lu = a.lastUpdated;
+      if (!lu) return false;
+      const d = new Date(lu);
+      const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      return m === lastMonthKeyVal;
+    }).length;
+  }, [viewFilteredApplications, lastMonthKeyVal]);
+  const newLeadsLastMonth = useMemo(() => {
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return clients.filter((c) => {
+      const createdAt = c.createdAt;
+      if (!createdAt) return false;
+      const d = new Date(createdAt);
+      return d.getMonth() === lastMonth.getMonth() && d.getFullYear() === lastMonth.getFullYear();
+    }).length;
+  }, [clients]);
+  const lastMonthSameDay = useMemo(() => {
+    const d = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+    return d.toISOString().slice(0, 10);
+  }, []);
+  const tasksDueTodayLastMonth = useMemo(
+    () => (allTasks || []).filter((t) => t.dueDate === lastMonthSameDay && !t.isCompleted).length,
+    [allTasks, lastMonthSameDay]
+  );
+  const conversionRateLastMonth = useMemo(() => {
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1);
+    const inLastMonth = (lu: string) => {
+      const d = new Date(lu);
+      return d.getMonth() === lastMonth.getMonth() && d.getFullYear() === lastMonth.getFullYear();
     };
-  }, [filterRef]);
+    const settledLastMonth = settledApplications.filter((a) => a.lastUpdated && inLastMonth(a.lastUpdated)).length;
+    const totalLastMonth = viewFilteredApplications.filter((a) => a.lastUpdated && inLastMonth(a.lastUpdated)).length;
+    if (totalLastMonth === 0) return 0;
+    return (settledLastMonth / totalLastMonth) * 100;
+  }, [viewFilteredApplications, settledApplications]);
 
+  const metricPctChanges = useMemo(() => {
+    const activePct = pctChange(activeApplicationsCount, activeApplicationsLastMonth);
+    const leadsPct = pctChange(newLeadsThisMonth, newLeadsLastMonth);
+    const tasksPct = pctChange(tasksDueTodayCount, tasksDueTodayLastMonth);
+    const convCurrent = totalApplicationsCount > 0 ? (settledApplications.length / totalApplicationsCount) * 100 : 0;
+    const convPct = conversionRateLastMonth !== 0 ? pctChange(convCurrent, conversionRateLastMonth) : (convCurrent > 0 ? 100 : null);
+    return { activePct, leadsPct, tasksPct, convPct };
+  }, [
+    activeApplicationsCount,
+    activeApplicationsLastMonth,
+    newLeadsThisMonth,
+    newLeadsLastMonth,
+    tasksDueTodayCount,
+    tasksDueTodayLastMonth,
+    totalApplicationsCount,
+    settledApplications.length,
+    conversionRateLastMonth,
+  ]);
 
-  const filteredApplications = useMemo(() => {
-    let apps = applications;
-    if (applicationView === 'my') {
-      apps = apps.filter(app => app.advisorId === advisor.id);
-    }
-    if (filter === 'All') return apps;
-    return apps.filter(app => app.status_detail === filter);
-  }, [applications, filter, applicationView, advisor.id]);
-
-  const APPS_PER_PAGE = 10;
-  const indexOfLastApp = currentPage * APPS_PER_PAGE;
-  const indexOfFirstApp = indexOfLastApp - APPS_PER_PAGE;
-  const currentApplications = filteredApplications.slice(indexOfFirstApp, indexOfLastApp);
-  const totalPages = Math.ceil(filteredApplications.length / APPS_PER_PAGE);
-
-  const workflowChartData = useMemo(() => {
-    if (!applications.length) return [];
-    
-    const stageCounts = applications.reduce((acc, app) => {
-        if (app.status in acc) {
-            acc[app.status]++;
-        }
-        return acc;
-    }, {
-        [ApplicationStatus.ApplicationSubmitted]: 0,
-        [ApplicationStatus.ConditionalApproval]: 0,
-        [ApplicationStatus.UnconditionalApproval]: 0,
+  const advisorPerformanceRows = useMemo(() => {
+    const firmAdvisors = (advisors || []).filter((a) => a.firmId === advisor.firmId);
+    const byAdvisor = new Map<string, { activeDeals: number; pipelineValue: number; settledThisMonth: number; settledYTD: number }>();
+    const thisYear = now.getFullYear();
+    const thisMonth = now.getMonth();
+    viewFilteredApplications.forEach((app) => {
+      const aid = app.advisorId || '';
+      if (!aid) return;
+      if (!byAdvisor.has(aid)) {
+        byAdvisor.set(aid, { activeDeals: 0, pipelineValue: 0, settledThisMonth: 0, settledYTD: 0 });
+      }
+      const row = byAdvisor.get(aid)!;
+      const isSettled = app.status === ApplicationStatus.Settled;
+      const isActive = !isSettled && app.status !== ApplicationStatus.Declined;
+      if (isActive) {
+        row.activeDeals += 1;
+        row.pipelineValue += app.loanAmount || 0;
+      }
+      if (isSettled && app.lastUpdated) {
+        const d = new Date(app.lastUpdated);
+        if (d.getFullYear() === thisYear) row.settledYTD += app.loanAmount || 0;
+        if (d.getMonth() === thisMonth && d.getFullYear() === thisYear) row.settledThisMonth += app.loanAmount || 0;
+      }
     });
+    return firmAdvisors
+      .map((a) => ({
+        advisor: a,
+        activeDeals: byAdvisor.get(a.id)?.activeDeals ?? 0,
+        pipelineValue: byAdvisor.get(a.id)?.pipelineValue ?? 0,
+        settledThisMonth: byAdvisor.get(a.id)?.settledThisMonth ?? 0,
+        settledYTD: byAdvisor.get(a.id)?.settledYTD ?? 0,
+      }))
+      .sort((x, y) => y.settledThisMonth - x.settledThisMonth);
+  }, [advisors, advisor.firmId, viewFilteredApplications]);
 
-    return Object.entries(stageCounts).map(([name, value]) => ({ name, value }));
-  }, [applications]);
+  const avgDealSize =
+    settledApplications.length > 0
+      ? settledApplications.reduce((s, a) => s + (a.loanAmount || 0), 0) / settledApplications.length
+      : 0;
 
-  const advisorLoanData = useMemo(() => {
-    if (!applications.length) return [];
-    
-    const advisorCounts = applications.reduce<Record<string, number>>((acc, app) => {
-        const advisorName = app.updatedByName;
-        acc[advisorName] = (acc[advisorName] || 0) + 1;
-        return acc;
-    }, {});
+  const pipelineByStage = useMemo(() => {
+    const byStage: Record<string, Application[]> = {};
+    PIPELINE_BOARD_STAGES.forEach((stage) => {
+      byStage[stage] = viewFilteredApplications.filter((a) => workflowKey(a) === stage);
+    });
+    return byStage;
+  }, [viewFilteredApplications]);
 
-    // FIX: Explicitly convert loans to a number to satisfy TypeScript's strict arithmetic operation rules, which can fail with complex type inferences.
-    return Object.entries(advisorCounts).map(([name, loans]) => ({ name, loans: Number(loans) })).sort((a,b) => b.loans - a.loans);
-  }, [applications]);
+  const monthKeys = useMemo(() => getMonthKeysLast6(), []);
 
-  const handleFilterChange = (newFilter: typeof filter) => {
-    setFilter(newFilter);
-    setIsFilterOpen(false);
-    setCurrentPage(1);
-  }
-  
-  const toggleButtonClasses = (isActive: boolean) => 
-    `inline-flex items-center px-3 py-1.5 text-xs font-medium focus:z-10 focus:outline-none focus:ring-1 focus:ring-primary-500 transition-colors ${
-        isActive
-        ? 'bg-primary-600 text-white'
-        : 'bg-white dark:bg-gray-700 text-gray-500 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600'
-    }`;
+  const areaChartData = useMemo(() => {
+    return monthKeys.map(({ key, label }) => {
+      const sum = viewFilteredApplications
+        .filter((a) => {
+          const lu = a.lastUpdated;
+          if (!lu) return false;
+          const d = new Date(lu);
+          const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          return m === key;
+        })
+        .reduce((s, a) => s + (a.loanAmount || 0), 0);
+      return { month: label, value: sum };
+    });
+  }, [viewFilteredApplications, monthKeys]);
+
+  const monthlySettledData = useMemo(() => {
+    return monthKeys.map(({ key, label }) => {
+      const sum = settledApplications
+        .filter((a) => {
+          const lu = a.lastUpdated;
+          if (!lu) return false;
+          const d = new Date(lu);
+          const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          return m === key;
+        })
+        .reduce((s, a) => s + (a.loanAmount || 0), 0);
+      return { month: label, value: sum };
+    });
+  }, [settledApplications, monthKeys]);
+
+  const donutData = useMemo(() => {
+    return DONUT_STAGES.map((stage) => ({
+      name: stage.charAt(0).toUpperCase() + stage.slice(1),
+      value: viewFilteredApplications.filter((a) => workflowKey(a) === stage).length,
+    })).filter((d) => d.value > 0);
+  }, [viewFilteredApplications]);
+
+  const clientNamesById = useMemo(() => {
+    const map: Record<string, string> = {};
+    clients.forEach((c) => { map[c.id] = c.name; });
+    return map;
+  }, [clients]);
+
+  const daysInStage = (app: Application): number => {
+    const lu = app.lastUpdated;
+    if (!lu) return 0;
+    return Math.floor((Date.now() - new Date(lu).getTime()) / 86400000);
+  };
+
+  const activeApplicationsFiltered = useMemo(() => {
+    const q = activeAppsSearch.trim().toLowerCase();
+    if (!q) return activeApplications;
+    return activeApplications.filter((a) =>
+      (a.clientName || '').toLowerCase().includes(q)
+    );
+  }, [activeApplications, activeAppsSearch]);
+
+  const cardClass = 'bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6';
+
+  const metricCardStyles = [
+    { backgroundColor: PASTEL.blue.bg, borderLeft: `4px solid ${PASTEL.blue.text}` },
+    { backgroundColor: PASTEL.green.bg, borderLeft: `4px solid ${PASTEL.green.text}` },
+    { backgroundColor: PASTEL.orange.bg, borderLeft: `4px solid ${PASTEL.orange.text}` },
+    { backgroundColor: PASTEL.purple.bg, borderLeft: `4px solid ${PASTEL.purple.text}` },
+  ];
 
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard icon="Users" title="New Leads" value="32" change="+12.5%" changeType="increase" />
-        <StatCard icon="Banknote" title="Loans Settled" value="$1.2M" change="+5.2%" changeType="increase" />
-        <StatCard icon="Briefcase" title="Active Applications" value={applications.length.toString()} change="-2.1%" changeType="decrease" />
-        <StatCard icon="CheckSquare" title="Tasks Due" value="8" change="+10.0%" changeType="increase" />
+    <div className="min-h-full rounded-xl bg-[#f8fafc] dark:bg-gray-900">
+      <div className="space-y-6 p-6">
+      {/* HEADER ROW */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
+        {advisor.role === 'admin' && (
+          <div className="inline-flex rounded-full p-1 bg-white dark:bg-gray-700 shadow-sm border border-gray-200 dark:border-gray-600">
+            <button
+              type="button"
+              onClick={() => setViewMode('my')}
+              className={`px-4 py-2 text-sm font-medium rounded-full transition-colors ${
+                viewMode === 'my'
+                  ? 'shadow-sm'
+                  : 'text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white'
+              }`}
+              style={viewMode === 'my' ? { backgroundColor: PASTEL.blue.bg, color: PASTEL.blue.text } : undefined}
+            >
+              My View
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('firm')}
+              className={`px-4 py-2 text-sm font-medium rounded-full transition-colors ${
+                viewMode === 'firm'
+                  ? 'shadow-sm'
+                  : 'text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white'
+              }`}
+              style={viewMode === 'firm' ? { backgroundColor: PASTEL.blue.bg, color: PASTEL.blue.text } : undefined}
+            >
+              Firm View
+            </button>
+          </div>
+        )}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <Card>
-          <h3 className="text-lg font-semibold mb-4">Applications Settled This Year</h3>
-          <div style={{ width: '100%', height: 300 }}>
-            <ResponsiveContainer>
-                <BarChart data={chartData} margin={{ top: 20, right: 10, left: -10, bottom: 5 }}>
-                    <defs>
-                        <linearGradient id="dealGradient" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#2563eb" stopOpacity={0.8}/>
-                            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.4}/>
-                        </linearGradient>
-                    </defs>
-                    <XAxis 
-                        dataKey="name" 
-                        tickLine={false} 
-                        axisLine={false} 
-                        tick={{ fill: 'currentColor', fontSize: 12 }} 
-                    />
-                    <YAxis 
-                        tickLine={false} 
-                        axisLine={false} 
-                        tick={{ fill: 'currentColor', fontSize: 12 }}
-                    />
-                    <Tooltip 
-                        content={<CustomTooltip />} 
-                        cursor={{ fill: 'rgba(128, 128, 128, 0.1)' }} 
-                    />
-                    <Bar 
-                        dataKey="applications" 
-                        fill="url(#dealGradient)" 
-                        name="Applications Settled" 
-                        radius={[10, 10, 0, 0]} 
-                    />
+      {/* ROW 1 — Two hero cards 50/50 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className={cardClass}>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Total Pipeline Value</p>
+          {loading ? (
+            <div className="h-10 w-32 bg-gray-200 dark:bg-gray-600 rounded animate-pulse mt-1" />
+          ) : (
+            <p className="text-4xl font-bold text-gray-900 dark:text-white mt-1">
+              {formatCurrency(totalPipelineValue)}
+            </p>
+          )}
+          <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">
+            across {activeApplications.length} active applications
+          </p>
+          <div className="mt-4 h-48">
+            {loading ? (
+              <div className="h-full w-full bg-gray-100 dark:bg-gray-700 rounded-lg animate-pulse" />
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={areaChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <defs>
+                    <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={PASTEL.blue.text} stopOpacity={0.4} />
+                      <stop offset="100%" stopColor={PASTEL.blue.text} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <YAxis hide domain={['auto', 'auto']} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: 'rgba(255,255,255,0.95)',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                    }}
+                    formatter={(value: number) => [formatCurrency(value), 'Value']}
+                    labelFormatter={(label) => label}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="value"
+                    stroke={PASTEL.blue.text}
+                    strokeWidth={2}
+                    fill="url(#areaGradient)"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+        <div className={cardClass}>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Settled This Month</p>
+          {loading ? (
+            <div className="h-10 w-32 bg-gray-200 dark:bg-gray-600 rounded animate-pulse mt-1" />
+          ) : (
+            <p className="text-4xl font-bold text-gray-900 dark:text-white mt-1">
+              {formatCurrency(settledValueThisMonth)}
+            </p>
+          )}
+          <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">
+            {settledThisMonthCount} deals settled
+          </p>
+          <div className="mt-4 h-48">
+            {loading ? (
+              <div className="h-full w-full bg-gray-100 dark:bg-gray-700 rounded-lg animate-pulse" />
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={monthlySettledData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <YAxis
+                    tick={{ fontSize: 12 }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(v) => (v >= 1e6 ? `${v / 1e6}M` : v >= 1e3 ? `${v / 1e3}K` : v)}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: 'rgba(255,255,255,0.95)',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                    }}
+                    formatter={(value: number) => [formatCurrency(value), 'Settled']}
+                  />
+                  <Bar dataKey="value" fill={PASTEL.blue.text} radius={[4, 4, 0, 0]} />
                 </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-
-        <Card>
-            <h3 className="text-lg font-semibold mb-4">Work Flow Stage</h3>
-            <div style={{ width: '100%', height: 300 }}>
-             {isLoadingApplications ? (
-                 <div className="flex justify-center items-center h-full">
-                    <Icon name="Loader" className="h-8 w-8 animate-spin text-primary-500" />
-                </div>
-             ) : workflowChartData.every(d => d.value === 0) ? (
-                <div className="flex justify-center items-center h-full text-sm text-gray-500 dark:text-gray-400">
-                    No active applications to display.
-                </div>
-             ) : (
-                <ResponsiveContainer>
-                    <PieChart>
-                        <Pie
-                            data={workflowChartData}
-                            cx="40%"
-                            cy="50%"
-                            innerRadius={60}
-                            outerRadius={80}
-                            fill="#8884d8"
-                            paddingAngle={5}
-                            dataKey="value"
-                            nameKey="name"
-                        >
-                            {workflowChartData.map((entry, index) => (
-                                <Cell key={`cell-${index}`} fill={WORKFLOW_COLORS[index % WORKFLOW_COLORS.length]} />
-                            ))}
-                        </Pie>
-                        <Tooltip
-                            contentStyle={{ 
-                                backgroundColor: 'rgba(31, 41, 55, 0.8)', 
-                                borderColor: 'rgba(128, 128, 128, 0.5)' 
-                            }}
-                            labelStyle={{ color: '#fff' }}
-                        />
-                        <Legend 
-                            iconSize={10} 
-                            wrapperStyle={{fontSize: '12px'}} 
-                            layout="vertical"
-                            verticalAlign="middle"
-                            align="right"
-                        />
-                    </PieChart>
-                </ResponsiveContainer>
-             )}
-            </div>
-        </Card>
-        
-        <Card>
-            <h3 className="text-lg font-semibold mb-4">Active Loans by Advisor</h3>
-            <div style={{ width: '100%', height: 300 }}>
-                {isLoadingApplications ? (
-                    <div className="flex justify-center items-center h-full">
-                        <Icon name="Loader" className="h-8 w-8 animate-spin text-primary-500" />
-                    </div>
-                ) : advisorLoanData.length === 0 ? (
-                    <div className="flex justify-center items-center h-full text-sm text-gray-500 dark:text-gray-400">
-                        No active loans to display.
-                    </div>
-                ) : (
-                    <ResponsiveContainer>
-                        <BarChart data={advisorLoanData} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 5 }}>
-                            <XAxis type="number" hide />
-                            <YAxis 
-                                type="category" 
-                                dataKey="name" 
-                                axisLine={false} 
-                                tickLine={false} 
-                                tick={{ fill: 'currentColor', fontSize: 11 }} 
-                                width={95}
-                                interval={0}
-                            />
-                            <Tooltip 
-                                cursor={{ fill: 'rgba(128, 128, 128, 0.1)' }}
-                                contentStyle={{ 
-                                    backgroundColor: 'rgba(31, 41, 55, 0.8)', 
-                                    borderColor: 'rgba(128, 128, 128, 0.5)' 
-                                }}
-                                labelStyle={{ color: '#fff' }}
-                            />
-                            <Bar dataKey="loans" name="Active Loans" barSize={20} radius={[0, 5, 5, 0]}>
-                                {advisorLoanData.map((entry, index) => (
-                                    <Cell key={`cell-${index}`} fill={ADVISOR_COLORS[index % ADVISOR_COLORS.length]} />
-                                ))}
-                                 <LabelList dataKey="loans" position="right" offset={5} style={{ fill: 'currentColor', fontSize: 12 }} />
-                            </Bar>
-                        </BarChart>
-                    </ResponsiveContainer>
-                )}
-            </div>
-        </Card>
-
-        <Card className="lg:col-span-3">
-            <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-semibold flex items-center">
-                    <Icon name="Percent" className="h-5 w-5 mr-2 text-primary-500" />
-                    Current Interest Rates
-                </h3>
-                <Button variant="ghost" size="sm" onClick={fetchRates} isLoading={isLoadingRates} leftIcon="RefreshCw">
-                    Refresh
-                </Button>
-            </div>
-            {isLoadingRates ? (
-                <div className="flex justify-center items-center h-24">
-                    <Icon name="Loader" className="h-6 w-6 animate-spin text-primary-500" />
-                </div>
-            ) : (
-                <div className="overflow-x-auto">
-                    <table className="w-full text-sm text-left">
-                        <thead className="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
-                            <tr>
-                                <th scope="col" className="px-4 py-2">Lender</th>
-                                {interestRates[0]?.rates.map(rate => (
-                                    <th key={rate.term} scope="col" className="px-4 py-2 text-center">{rate.term}</th>
-                                ))}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {interestRates.map(bank => (
-                                <tr key={bank.lender} className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 last:border-b-0">
-                                    <td className="px-4 py-2 font-semibold text-gray-900 dark:text-white">{bank.lender}</td>
-                                    {bank.rates.map(rate => (
-                                        <td key={rate.term} className="px-4 py-2 text-center">{rate.rate.toFixed(2)}%</td>
-                                    ))}
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            )}
-        </Card>
-
-        <Card className="lg:col-span-3">
-          <div className="flex justify-between items-center mb-4">
-            <div className="flex items-center space-x-4">
-                <h3 className="text-lg font-semibold">Mortgages</h3>
-                <div className="inline-flex rounded-md shadow-sm border border-gray-200 dark:border-gray-600">
-                    <button onClick={() => setApplicationView('my')} className={`${toggleButtonClasses(applicationView === 'my')} rounded-l-md`}>
-                        My Applications
-                    </button>
-                    <button onClick={() => setApplicationView('all')} className={`${toggleButtonClasses(applicationView === 'all')} -ml-px rounded-r-md`}>
-                        All Applications
-                    </button>
-                </div>
-            </div>
-             <div className="relative" ref={filterRef}>
-                <Button variant="secondary" size="sm" leftIcon="Filter" onClick={() => setIsFilterOpen(!isFilterOpen)}>
-                    Filter: {filter}
-                </Button>
-                {isFilterOpen && (
-                    <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-md shadow-lg z-10 border dark:border-gray-700">
-                        <a href="#" onClick={(e) => {e.preventDefault(); handleFilterChange('All')}} className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">All</a>
-                        <a href="#" onClick={(e) => {e.preventDefault(); handleFilterChange('Active')}} className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">Active</a>
-                        <a href="#" onClick={(e) => {e.preventDefault(); handleFilterChange('Needs Attention')}} className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">Needs Attention</a>
-                        <a href="#" onClick={(e) => {e.preventDefault(); handleFilterChange('On Hold')}} className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">On Hold</a>
-                    </div>
-                )}
-             </div>
-          </div>
-          <div className="overflow-x-auto">
-            {isLoadingApplications ? (
-                 <div className="flex justify-center items-center h-48">
-                    <Icon name="Loader" className="h-8 w-8 animate-spin text-primary-500" />
-                </div>
-            ) : (
-                <table className="w-full text-sm text-left text-gray-500 dark:text-gray-400">
-                    <thead className="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
-                        <tr>
-                            <th scope="col" className="px-6 py-3">Reference Number</th>
-                            <th scope="col" className="px-6 py-3">Customer Name</th>
-                            <th scope="col" className="px-6 py-3">Workflow Stage</th>
-                            <th scope="col" className="px-6 py-3">Status</th>
-                            <th scope="col" className="px-6 py-3">Last Updated</th>
-                            <th scope="col" className="px-6 py-3">Updated By</th>
-                            <th scope="col" className="px-6 py-3">Risk</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {currentApplications.map(app => (
-                            <tr key={app.id} onClick={() => navigateToClient(app.clientId)} className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 cursor-pointer">
-                                <td className="px-6 py-4 font-medium text-gray-900 dark:text-white whitespace-nowrap">{app.referenceNumber}</td>
-                                <td className="px-6 py-4">{app.clientName}</td>
-                                <td className="px-6 py-4"><ApplicationStatusBadge status={app.status} /></td>
-                                <td className="px-6 py-4"><StatusDetailBadge status={app.status_detail} /></td>
-                                <td className="px-6 py-4">{timeAgo(app.lastUpdated)}</td>
-                                <td className="px-6 py-4">{app.updatedByName}</td>
-                                <td className="px-6 py-4"><RiskBadge risk={app.riskLevel} /></td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
+              </ResponsiveContainer>
             )}
           </div>
-          {!isLoadingApplications && filteredApplications.length > APPS_PER_PAGE && (
-            <div className="flex justify-between items-center pt-4 border-t dark:border-gray-700 mt-4">
-                <span className="text-sm text-gray-700 dark:text-gray-400">
-                    Showing {indexOfFirstApp + 1} to {Math.min(indexOfLastApp, filteredApplications.length)} of {filteredApplications.length} entries
+        </div>
+      </div>
+
+      {/* ROW 2 — 4 metric cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        {[
+          { label: 'Active Applications', value: loading ? '—' : activeApplicationsCount.toString(), pct: metricPctChanges.activePct },
+          { label: 'New Leads This Month', value: loading ? '—' : newLeadsThisMonth.toString(), pct: metricPctChanges.leadsPct },
+          { label: 'Tasks Due Today', value: loading ? '—' : tasksDueTodayCount.toString(), pct: metricPctChanges.tasksPct },
+          { label: 'Conversion Rate', value: loading ? '—' : `${conversionRate}%`, pct: metricPctChanges.convPct },
+        ].map((m, idx) => (
+          <div
+            key={m.label}
+            className="rounded-xl shadow-sm p-6 border-l-4 dark:bg-gray-800/80"
+            style={metricCardStyles[idx]}
+          >
+            <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+              {m.label}
+            </p>
+            {loading ? (
+              <div className="h-9 w-16 bg-gray-200 dark:bg-gray-600 rounded animate-pulse mt-2" />
+            ) : (
+              <p className="text-3xl font-bold text-gray-900 dark:text-white mt-2">{m.value}</p>
+            )}
+            {!loading && m.pct !== null && (
+              <div className="mt-2 flex items-center gap-1">
+                {m.pct > 0 && <span className="text-green-600 dark:text-green-400 text-xs">↑</span>}
+                {m.pct < 0 && <span className="text-red-600 dark:text-red-400 text-xs">↓</span>}
+                {m.pct === 0 && <span className="text-gray-500 dark:text-gray-400 text-xs">→</span>}
+                <span
+                  className={`text-xs font-medium ${
+                    m.pct > 0 ? 'text-green-600 dark:text-green-400' : m.pct < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-gray-400'
+                  }`}
+                >
+                  {m.pct > 0 ? '+' : ''}{m.pct}% vs last month
                 </span>
-                <div className="inline-flex -space-x-px">
-                    <Button
-                        onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                        disabled={currentPage === 1}
-                        variant="secondary"
-                        size="sm"
-                        className="rounded-r-none"
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* ROW 3 — 65/35 Pipeline + Tasks + Recent Activity */}
+      <div className="grid grid-cols-1 lg:grid-cols-10 gap-6">
+        <div className="lg:col-span-6">
+          <div className={cardClass}>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+              Pipeline
+            </h3>
+            {loading ? (
+              <div className="flex gap-3 overflow-x-auto pb-2">
+                {PIPELINE_BOARD_STAGES.map((s) => (
+                  <div
+                    key={s}
+                    className="flex-shrink-0 w-44 h-64 bg-gray-100 dark:bg-gray-700 rounded-lg animate-pulse"
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="flex gap-3 overflow-x-auto pb-2" style={{ maxHeight: 320 }}>
+                {PIPELINE_BOARD_STAGES.map((stage) => {
+                  const apps = pipelineByStage[stage] || [];
+                  const stageTotal = apps.reduce((s, a) => s + (a.loanAmount || 0), 0);
+                  const stageStyle = STAGE_PASTEL[stage] || PASTEL.blue;
+                  return (
+                    <div
+                      key={stage}
+                      className="flex-shrink-0 w-44 flex flex-col rounded-lg bg-white dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700 overflow-hidden shadow-sm"
                     >
-                        Previous
-                    </Button>
-                    <Button
-                        onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                        disabled={currentPage === totalPages}
-                        variant="secondary"
-                        size="sm"
-                        className="rounded-l-none"
-                    >
-                        Next
-                    </Button>
+                      <div
+                        className="px-3 py-2 border-b border-gray-200 dark:border-gray-600"
+                        style={{ backgroundColor: stageStyle.bg }}
+                      >
+                        <span className="text-sm font-medium capitalize" style={{ color: stageStyle.text }}>
+                          {stage}
+                        </span>
+                        <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
+                          {apps.length}
+                        </span>
+                        <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                          {formatCurrency(stageTotal)}
+                        </p>
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-2 space-y-2 bg-gray-50/50 dark:bg-gray-800/30" style={{ maxHeight: 280 }}>
+                        {apps.map((app) => (
+                          <button
+                            key={app.id}
+                            type="button"
+                            onClick={() => navigateToApplication(app.id)}
+                            className="w-full text-left p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-600 hover:shadow-md transition-all border-l-4"
+                            style={{ borderLeftColor: stageStyle.border }}
+                          >
+                            <p className="font-medium text-gray-900 dark:text-white truncate text-sm">
+                              {app.clientName}
+                            </p>
+                            <p className="text-lg font-bold mt-0.5" style={{ color: PASTEL.blue.text }}>
+                              {app.loanAmount ? formatCurrency(app.loanAmount) : '—'}
+                            </p>
+                            <p className="text-xs text-gray-400 dark:text-gray-500 truncate">
+                              {app.lender || '—'}
+                            </p>
+                            <span className="inline-block mt-1 text-xs px-2 py-0.5 rounded" style={{ backgroundColor: stageStyle.bg, color: stageStyle.text }}>
+                              {daysInStage(app)}d
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="lg:col-span-4">
+          {viewMode === 'firm' && advisor.role === 'admin' ? (
+            <div className={cardClass}>
+              <div className="flex items-center justify-between gap-2 mb-4">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  Advisor Performance
+                </h3>
+                <div className="inline-flex rounded-lg p-0.5 bg-gray-100 dark:bg-gray-700">
+                  <button
+                    type="button"
+                    onClick={() => setAdvisorPerfFilter('this_month')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                      advisorPerfFilter === 'this_month'
+                        ? 'bg-white dark:bg-gray-600 shadow text-gray-900 dark:text-white'
+                        : 'text-gray-600 dark:text-gray-400'
+                    }`}
+                  >
+                    This Month
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdvisorPerfFilter('ytd')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                      advisorPerfFilter === 'ytd'
+                        ? 'bg-white dark:bg-gray-600 shadow text-gray-900 dark:text-white'
+                        : 'text-gray-600 dark:text-gray-400'
+                    }`}
+                  >
+                    YTD
+                  </button>
                 </div>
+              </div>
+              {loading ? (
+                <div className="overflow-x-auto">
+                  <div className="h-48 bg-gray-100 dark:bg-gray-700 rounded-lg animate-pulse" />
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm text-left text-gray-700 dark:text-gray-300">
+                    <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-600">
+                      <tr>
+                        <th className="py-2 pr-2">Advisor</th>
+                        <th className="py-2 px-2 text-right">Active Deals</th>
+                        <th className="py-2 px-2 text-right">Pipeline Value</th>
+                        <th className="py-2 px-2 text-right">{advisorPerfFilter === 'ytd' ? 'Settled YTD' : 'Settled This Month'}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                      {advisorPerformanceRows.map(({ advisor: a, activeDeals, pipelineValue, settledThisMonth, settledYTD }) => (
+                        <tr key={a.id}>
+                          <td className="py-2 pr-2">
+                            <div className="flex items-center gap-2">
+                              <img src={a.avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover" />
+                              <span className="font-medium text-gray-900 dark:text-white">{a.name}</span>
+                            </div>
+                          </td>
+                          <td className="py-2 px-2 text-right">{activeDeals}</td>
+                          <td className="py-2 px-2 text-right">{formatCurrency(pipelineValue)}</td>
+                          <td className="py-2 px-2 text-right">{formatCurrency(advisorPerfFilter === 'this_month' ? settledThisMonth : settledYTD)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
-           )}
-        </Card>
+          ) : (
+            <div className={cardClass}>
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                Recent Activity
+              </h3>
+              {loading ? (
+                <div className="space-y-3">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="flex gap-3">
+                      <div className="h-9 w-9 rounded-full bg-gray-200 dark:bg-gray-600 animate-pulse flex-shrink-0" />
+                      <div className="flex-1 h-12 bg-gray-100 dark:bg-gray-700 rounded animate-pulse" />
+                    </div>
+                  ))}
+                </div>
+              ) : recentNotes.length === 0 ? (
+                <p className="text-sm text-gray-500 dark:text-gray-400">No recent activity.</p>
+              ) : (
+                <ul className="divide-y divide-gray-100 dark:divide-gray-700">
+                  {recentNotes.map((note) => (
+                    <li key={note.id} className="flex gap-3 py-3 first:pt-0 last:pb-0">
+                      <div className="flex-shrink-0 w-9 h-9 rounded-full bg-[#dbeafe] dark:bg-blue-900/40 flex items-center justify-center text-xs font-medium text-[#2563eb] dark:text-blue-300">
+                        {(note.authorName || '?').slice(0, 2).toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 dark:text-white">{note.authorName}</p>
+                        <p className="text-sm text-gray-600 dark:text-gray-400 truncate">
+                          {(note.content || '').slice(0, 60)}
+                          {(note.content || '').length > 60 ? '…' : ''}
+                        </p>
+                        <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{timeAgo(note.createdAt)}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ROW 4 — Donut, Bar, Quick Actions */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className={cardClass}>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Applications by Stage
+          </h3>
+          {loading ? (
+            <div className="h-64 flex items-center justify-center bg-gray-50 dark:bg-gray-700/50 rounded-lg animate-pulse" />
+          ) : donutData.length === 0 ? (
+            <div className="h-64 flex items-center justify-center text-sm text-gray-500 dark:text-gray-400">
+              No data
+            </div>
+          ) : (
+            <>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={donutData}
+                      cx="50%"
+                      cy="45%"
+                      innerRadius={56}
+                      outerRadius={80}
+                      paddingAngle={2}
+                      dataKey="value"
+                      nameKey="name"
+                    >
+                      {donutData.map((_, i) => (
+                        <Cell key={i} fill={PASTEL_CHART_COLORS[i % PASTEL_CHART_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                    <Legend layout="horizontal" align="center" wrapperStyle={{ fontSize: '12px' }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </>
+          )}
+        </div>
+        <div className={cardClass}>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Monthly Settled Loans
+          </h3>
+          {loading ? (
+            <div className="h-64 bg-gray-50 dark:bg-gray-700/50 rounded-lg animate-pulse" />
+          ) : (
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={monthlySettledData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <YAxis
+                    tick={{ fontSize: 12 }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(v) => (v >= 1e6 ? `${v / 1e6}M` : v >= 1e3 ? `${v / 1e3}K` : v)}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: 'rgba(255,255,255,0.95)',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                    }}
+                    formatter={(value: number) => [formatCurrency(value), 'Settled']}
+                  />
+                  <Bar dataKey="value" fill={PASTEL.blue.text} radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+        <div className={cardClass}>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Quick Actions</h3>
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={() => setCurrentView('applications')}
+              className="w-full py-3 px-4 rounded-lg text-sm font-medium transition-colors hover:opacity-90"
+              style={{ backgroundColor: PASTEL.blue.bg, color: PASTEL.blue.text }}
+            >
+              + New Application
+            </button>
+            <button
+              type="button"
+              onClick={() => setCurrentView('clients')}
+              className="w-full py-3 px-4 rounded-lg text-sm font-medium border-2 transition-colors hover:opacity-90"
+              style={{ borderColor: PASTEL.blue.text, color: PASTEL.blue.text }}
+            >
+              + New Client
+            </button>
+            <button
+              type="button"
+              onClick={() => setCurrentView('tasks')}
+              className="w-full py-3 px-4 rounded-lg text-sm font-medium border-2 transition-colors hover:opacity-90"
+              style={{ borderColor: PASTEL.blue.text, color: PASTEL.blue.text }}
+            >
+              + Add Task
+            </button>
+            <button
+              type="button"
+              onClick={() => setCurrentView('dashboard')}
+              className="w-full py-3 px-4 rounded-lg text-sm font-medium border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+            >
+              📊 View Reports
+            </button>
+          </div>
+        </div>
+      </div>
       </div>
     </div>
   );
 };
 
 export default Dashboard;
-

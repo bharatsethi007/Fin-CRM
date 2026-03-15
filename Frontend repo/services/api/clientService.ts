@@ -41,6 +41,7 @@ function mapRowToClient(client: any): Client {
         dateAdded: client.created_at
             ? new Date(client.created_at).toLocaleDateString('en-NZ')
             : '',
+        createdAt: client.created_at || undefined,
         advisorId: client.assigned_to || '',
         avatarUrl: client.photo_url || `https://i.pravatar.cc/150?u=${client.id}`,
         financials: {
