@@ -45,5 +45,11 @@ export const SETTINGS_NAV_ITEMS: SettingsNavGroup[] = [
             { id: 'email-calendar-security', name: 'Email and calendar', icon: 'Calendar' },
             { id: 'expert-access', name: 'Expert access grants', icon: 'KeyRound' },
         ],
-    }
+    },
+    {
+        title: 'Compliance',
+        items: [
+            { id: 'disclosure-statement', name: 'Disclosure Statement', icon: 'ShieldCheck' },
+        ],
+    },
 ];

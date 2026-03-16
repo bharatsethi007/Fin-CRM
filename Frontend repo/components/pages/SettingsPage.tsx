@@ -3,6 +3,7 @@ import type { Advisor } from '../../types';
 import { SettingsSidebar } from '../settings/SettingsSidebar';
 import { ProfileSettings } from '../settings/ProfileSettings';
 import { EmailSettings } from '../settings/EmailSettings';
+import { DisclosureStatement } from '../compliance/DisclosureStatement';
 import { Icon } from '../common/Icon';
 import { SETTINGS_NAV_ITEMS } from '../settings/settingsConstants';
 
@@ -37,6 +38,8 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ advisor, onBack, initialSec
         return <ProfileSettings advisor={advisor} />;
       case 'email-calendar':
         return <EmailSettings />;
+      case 'disclosure-statement':
+        return <DisclosureStatement advisorId={advisor.id} firmId={advisor.firmId} />;
       default:
         return (
             <div className="p-8 text-center text-gray-500 flex flex-col items-center justify-center h-full">
