@@ -1,3 +1,4 @@
+import { supabase } from '../supabaseClient';
 import { authService } from './authService';
 import { clientService } from './clientService';
 import { applicationService } from './applicationService';
@@ -20,14 +21,52 @@ export const crmService = {
     // Backward Compatibility Wrapper Methods for Refactoring
     getOneRoofPropertyDetails: (address: string) => toolsService.getOneRoofDetails(address),
     getAllCallTranscripts: (clientId?: string) => noteService.getCallTranscripts(clientId),
-    updateCallTranscript: async (id: string, updates: any) => { console.warn('Mock: updateCallTranscript', id, updates); },
-    addCallTranscript: async (transcript: any) => { console.warn('Mock: addCallTranscript', transcript); },
+    updateCallTranscript: async (id: string, updates: any) => {
+        const { data, error } = await supabase
+            .from('call_transcripts')
+            .update(updates)
+            .eq('id', id)
+            .select()
+            .single();
+        if (error) throw error;
+        return data;
+    },
+    addCallTranscript: async (transcript: any) => {
+        const { data, error } = await supabase
+            .from('call_transcripts')
+            .insert([transcript])
+            .select()
+            .single();
+        if (error) throw error;
+        return data;
+    },
     getTaskComments: async (taskId: string) => { return []; },
-    addTaskComment: async (comment: any) => { console.warn('Mock: addTaskComment', comment); },
+    addTaskComment: async (comment: any) => {
+        const { data, error } = await supabase
+            .from('task_comments')
+            .insert([comment])
+            .select()
+            .single();
+        if (error) throw error;
+        return data;
+    },
     updateTask: async (id: string, updates: any) => taskService.updateTask(id, updates),
     addTask: async (taskData: any) => taskService.createTask(taskData),
     createDraftApplication: async (clientId: string, _clientName: string) => applicationService.createApplication({ clientId }),
-    saveLenderRecommendation: async (clientId: string, recommendation: any) => { console.warn('Mock: saveLenderRecommendation', clientId); },
+    saveLenderRecommendation: async (clientId: string, recommendation: any) => {
+        const { data, error } = await supabase
+            .from('notes')
+            .insert([{
+                client_id: clientId,
+                firm_id: recommendation.firm_id,
+                content: JSON.stringify(recommendation),
+                author_name: recommendation.author_name || 'System',
+            }])
+            .select()
+            .single();
+        if (error) throw error;
+        return data;
+    },
     getApplicationById: async (id: string) => { const apps = await applicationService.getApplications(); return apps.find(a => a.id === id) || null; },
     saveApplicationDraft: async (id: string, updates: any) => applicationService.updateApplication(id, updates),
     submitApplication: async (id: string, _data: any) => applicationService.updateApplicationWorkflowStage(id, 'Application Submitted' as any),
