@@ -2004,112 +2004,95 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
   const [propertySearchTerm, setPropertySearchTerm] = useState('');
   const [propertySearchResults, setPropertySearchResults] = useState<any[]>([]);
   const [propertySearching, setPropertySearching] = useState(false);
-  const [propertyAddressField, setPropertyAddressField] = useState(detail?.property_address as string || '');
-  const [propertySuburbField, setPropertySuburbField] = useState((detail as any)?.property_suburb || '');
-  const [propertyCityField, setPropertyCityField] = useState((detail as any)?.property_city || '');
-  const [propertyRegionField, setPropertyRegionField] = useState((detail as any)?.property_region || '');
-  const [propertyPostcodeField, setPropertyPostcodeField] = useState((detail as any)?.property_postcode || '');
-  const [propertyTypeField, setPropertyTypeField] = useState<string>((detail as any)?.property_type || '');
-  const [zoningField, setZoningField] = useState<string>((detail as any)?.zoning || '');
-  const [propertyCvField, setPropertyCvField] = useState<number | ''>(
-    (detail?.property_value != null ? Number(detail.property_value) : '') as number | ''
+  const [propertyAddress, setPropertyAddress] = useState(application?.property_address || '');
+  const [propertySuburb, setPropertySuburb] = useState(application?.property_suburb || '');
+  const [propertyCity, setPropertyCity] = useState(application?.property_city || '');
+  const [propertyRegion, setPropertyRegion] = useState(application?.property_region || '');
+  const [propertyPostcode, setPropertyPostcode] = useState(application?.property_postcode || '');
+  const [propertyType, setPropertyType] = useState(application?.property_type || '');
+  const [zoning, setZoning] = useState(application?.zoning || '');
+  const [propertyValue, setPropertyValue] = useState<number | ''>(
+    application?.property_value ? Number(application.property_value) : ''
   );
-  const [valuationTypeField, setValuationTypeField] = useState<string>((detail as any)?.valuation_type || '');
-  const [landAreaField, setLandAreaField] = useState<number | ''>(((detail as any)?.land_area_m2 as number) || '');
-  const [titleNumberField, setTitleNumberField] = useState<string>((detail as any)?.title_number || '');
-  const [legalDescriptionField, setLegalDescriptionField] = useState<string>((detail as any)?.legal_description || '');
-
-  useEffect(() => {
-    setPropertyAddressField(detail?.property_address as string || '');
-    setPropertySuburbField((detail as any)?.property_suburb || '');
-    setPropertyCityField((detail as any)?.property_city || '');
-    setPropertyRegionField((detail as any)?.property_region || '');
-    setPropertyPostcodeField((detail as any)?.property_postcode || '');
-    setPropertyTypeField((detail as any)?.property_type || '');
-    setZoningField((detail as any)?.zoning || '');
-    setPropertyCvField((detail?.property_value != null ? Number(detail.property_value) : '') as number | '');
-    setValuationTypeField((detail as any)?.valuation_type || '');
-    setLandAreaField(((detail as any)?.land_area_m2 as number) || '');
-    setTitleNumberField((detail as any)?.title_number || '');
-    setLegalDescriptionField((detail as any)?.legal_description || '');
-  }, [detail?.id]);
+  const [valuationType, setValuationType] = useState(application?.valuation_type || '');
+  const [landArea, setLandArea] = useState<number | ''>(
+    application?.land_area_m2 ? Number(application.land_area_m2) : ''
+  );
+  const [titleNumber, setTitleNumber] = useState(application?.title_number || '');
+  const [legalDescription, setLegalDescription] = useState(application?.legal_description || '');
 
   const handleSearchProperty = async () => {
-    const term = propertySearchTerm.trim();
-    if (!term) return;
-    const apiKey = import.meta.env.VITE_LINZ_API_KEY;
-    if (!apiKey) {
-      setToastMessage('LINZ API key is not configured (VITE_LINZ_API_KEY).');
-      return;
-    }
+    if (!propertySearchTerm.trim()) return;
     setPropertySearching(true);
     try {
-      const url = `https://data.linz.govt.nz/services/query/v1/search.json?key=${encodeURIComponent(
-        apiKey
-      )}&tables=50772&q=${encodeURIComponent(term)}&limit=10`;
-      const res = await fetch(url);
-      const json = await res.json();
-      const rows = json?.rows || [];
-      setPropertySearchResults(rows);
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+        propertySearchTerm
+      )}&countrycodes=nz&format=json&addressdetails=1&limit=10`;
+      const res = await fetch(url, {
+        headers: { 'User-Agent': 'AdvisorFlow-CRM/1.0' },
+      });
+      const results = await res.json();
+      setPropertySearchResults(results || []);
     } catch (err) {
-      console.error('Failed to search LINZ addresses:', err);
-      setToastMessage('Failed to search LINZ addresses');
+      console.error('Nominatim search error:', err);
     } finally {
       setPropertySearching(false);
     }
   };
 
-  const handleSelectPropertyResult = (row: any) => {
-    const fullAddress =
-      row.full_address ||
-      row.address ||
-      row.formatted_address ||
-      [row.address_line_1, row.address_line_2, row.town_city, row.region].filter(Boolean).join(', ');
-    const suburb = row.suburb_locality || row.suburb || row.locality || '';
-    const city = row.town_city || row.city || '';
-    const region = row.region || row.region_name || '';
-    const postcode = row.postcode || row.post_code || '';
-    const title = row.title_no || row.title_number || '';
-    const landArea =
-      row.land_area || row.area || row.parcel_area || row.land_area_m2 || null;
-
-    setPropertySearchTerm(fullAddress || '');
-    setPropertyAddressField(fullAddress || '');
-    setPropertySuburbField(suburb);
-    setPropertyCityField(city);
-    setPropertyRegionField(region);
-    setPropertyPostcodeField(postcode);
-    setTitleNumberField(title || '');
-    setLandAreaField(landArea != null ? Number(landArea) : '');
+  const handleSelectProperty = (row: any) => {
+    const addr = row.display_name || '';
+    const parts = row.address || {};
+    setPropertyAddress(addr);
+    setPropertySuburb(parts.suburb || parts.neighbourhood || parts.hamlet || '');
+    setPropertyCity(parts.city || parts.town || parts.village || '');
+    setPropertyRegion(parts.state || parts.region || '');
+    setPropertyPostcode(parts.postcode || '');
+    setPropertySearchResults([]);
+    setPropertySearchTerm(addr);
   };
 
-  const handleSavePropertyDetails = async () => {
-    setSavingLending(true);
+  useEffect(() => {
+    if (propertySearchTerm.length < 3) {
+      setPropertySearchResults([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      handleSearchProperty();
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [propertySearchTerm]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.property-search-container')) {
+        setPropertySearchResults([]);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleSaveProperty = async () => {
     try {
-      const payload: Record<string, unknown> = {
-        property_address: propertyAddressField || null,
-        property_suburb: propertySuburbField || null,
-        property_city: propertyCityField || null,
-        property_region: propertyRegionField || null,
-        property_postcode: propertyPostcodeField || null,
-        property_type: propertyTypeField || null,
-        zoning: zoningField || null,
-        property_value: propertyCvField === '' ? null : Number(propertyCvField) || null,
-        valuation_type: valuationTypeField || null,
-        land_area_m2: landAreaField === '' ? null : Number(landAreaField) || null,
-        title_number: titleNumberField || null,
-        legal_description: legalDescriptionField || null,
-      };
-      await applicationService.updateApplication(application.id, payload);
-      const updated = (await applicationService.getApplicationById(application.id)) as ApplicationDetailRow;
-      setDetail(updated);
-      onUpdate();
-      setToastMessage('Property details saved');
+      await applicationService.updateApplication(application.id, {
+        property_address: propertyAddress,
+        property_suburb: propertySuburb,
+        property_city: propertyCity,
+        property_region: propertyRegion,
+        property_postcode: propertyPostcode,
+        property_type: propertyType,
+        zoning: zoning,
+        property_value: propertyValue === '' ? null : Number(propertyValue),
+        valuation_type: valuationType,
+        land_area_m2: landArea === '' ? null : Number(landArea),
+        title_number: titleNumber,
+        legal_description: legalDescription,
+      });
+      alert('Property details saved');
     } catch (err) {
-      console.error('Failed to save property details:', err);
-      setToastMessage('Failed to save property details');
-    } finally {
-      setSavingLending(false);
+      console.error('Save error:', err);
     }
   };
 
@@ -2344,7 +2327,188 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
                 ))}
               </select>
             </Card>
+        </div>
+        </div>
+
+        {/* Property Information */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 property-search-container relative">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Property Information</h3>
+          <div className="flex gap-2 mb-4">
+            <input
+              type="text"
+              value={propertySearchTerm}
+              onChange={e => setPropertySearchTerm(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSearchProperty()}
+              placeholder="Start typing a NZ property address..."
+              className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
+            />
+            <button
+              onClick={handleSearchProperty}
+              disabled={propertySearching}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+            >
+              {propertySearching ? 'Searching...' : 'Search'}
+            </button>
+            {propertySearching && (
+              <Icon name="Loader" className="h-4 w-4 animate-spin text-blue-500 ml-2" />
+            )}
           </div>
+          {propertySearchResults.length > 0 && (
+            <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+              {propertySearchResults.map((row: any, i: number) => (
+                <div
+                  key={i}
+                  onClick={() => handleSelectProperty(row)}
+                  className="px-4 py-3 text-sm cursor-pointer hover:bg-blue-50 dark:hover:bg-gray-700 border-b border-gray-100 dark:border-gray-700 last:border-0"
+                >
+                  <div className="font-medium text-gray-900 dark:text-white">
+                    {row.display_name?.split(',')[0]}
+                  </div>
+                  <div className="text-xs text-gray-400 mt-0.5">{row.display_name}</div>
+                </div>
+              ))}
+              {propertySearchResults.length === 0 && !propertySearching && (
+                <div className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
+                  No results found
+                </div>
+              )}
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="col-span-2">
+              <label className="text-xs font-medium text-gray-500 uppercase">Property Address</label>
+              <input
+                value={propertyAddress}
+                onChange={e => setPropertyAddress(e.target.value)}
+                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 uppercase">Suburb</label>
+              <input
+                value={propertySuburb}
+                onChange={e => setPropertySuburb(e.target.value)}
+                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 uppercase">City</label>
+              <input
+                value={propertyCity}
+                onChange={e => setPropertyCity(e.target.value)}
+                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 uppercase">Region</label>
+              <input
+                value={propertyRegion}
+                onChange={e => setPropertyRegion(e.target.value)}
+                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 uppercase">Postcode</label>
+              <input
+                value={propertyPostcode}
+                onChange={e => setPropertyPostcode(e.target.value)}
+                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 uppercase">Property Type</label>
+              <select
+                value={propertyType}
+                onChange={e => setPropertyType(e.target.value)}
+                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
+              >
+                <option value="">Select...</option>
+                <option>House and Land</option>
+                <option>Apartment/Unit/Flat</option>
+                <option>Townhouse</option>
+                <option>Section/Land</option>
+                <option>Commercial</option>
+                <option>Rural</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 uppercase">Zoning</label>
+              <select
+                value={zoning}
+                onChange={e => setZoning(e.target.value)}
+                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
+              >
+                <option value="">Select...</option>
+                <option>Residential</option>
+                <option>Investment</option>
+                <option>Commercial</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 uppercase">Property Value / CV</label>
+              <input
+                type="number"
+                value={propertyValue}
+                onChange={e => setPropertyValue(e.target.value === '' ? '' : Number(e.target.value))}
+                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 uppercase">Valuation Type</label>
+              <select
+                value={valuationType}
+                onChange={e => setValuationType(e.target.value)}
+                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
+              >
+                <option value="">Select...</option>
+                <option>Applicant Estimate</option>
+                <option>Registered Valuation</option>
+                <option>CV/RV</option>
+                <option>CoreLogic</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 uppercase">Land Area m²</label>
+              <input
+                type="number"
+                value={landArea}
+                onChange={e => setLandArea(e.target.value === '' ? '' : Number(e.target.value))}
+                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 uppercase">Title Number</label>
+              <input
+                value={titleNumber}
+                onChange={e => setTitleNumber(e.target.value)}
+                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
+              />
+            </div>
+            <div className="col-span-2">
+              <label className="text-xs font-medium text-gray-500 uppercase">Legal Description</label>
+              <input
+                value={legalDescription}
+                onChange={e => setLegalDescription(e.target.value)}
+                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
+              />
+            </div>
+          </div>
+          <div className="mt-4 flex items-center justify-between">
+            <button
+              onClick={handleSaveProperty}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
+            >
+              Save Property Details
+            </button>
+            <p className="text-xs text-gray-400">
+              Address data sourced from LINZ. CV/RV and sale history require CoreLogic integration.
+            </p>
+          </div>
+        </div>
+          </div>
+          <div className="hidden lg:block" />
         </div>
 
         {/* Application Notes */}
@@ -2391,6 +2555,7 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
      
 
         {/* AI Lender Recommendation */}
+        {false && (
         <div className="relative rounded-lg overflow-hidden">
           <div className="absolute -inset-0.5 bg-gradient-to-r from-purple-600 via-pink-600 to-blue-600 rounded-lg blur opacity-75 animate-[spin_6s_linear_infinite]" />
           <Card className="relative bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
@@ -2492,6 +2657,7 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
             )}
           </Card>
         </div>
+        )}
       </div>
     );
   };
