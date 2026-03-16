@@ -2,8 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../../services/supabaseClient';
 import { crmService } from '../../services/api';
 import type { Client, Advisor, Application } from '../../types';
-import { ApplicationStatus } from '../../types';
-import LoanApplicationForm from './LoanApplicationForm';
 import { Button } from '../common/Button';
 import { Icon } from '../common/Icon';
 import { ClientPortalStatus } from '../../types';
@@ -17,6 +15,7 @@ interface ClientDetailProps {
   onBack: () => void;
   onNewApplicationClick: () => void;
   onApplicationsUpdated?: () => void;
+  onOpenApplication?: (applicationId: string) => void;
 }
 
 function getCreditRating(score: number): string {
@@ -38,12 +37,11 @@ function computeFinancialAnalysis(f: Client['financials']) {
   return { netMonthlySurplus: netMonthly, dti, ltv, savingsRatio, hardshipRisk };
 }
 
-const ClientDetail: React.FC<ClientDetailProps> = ({ client, advisors = [], applicationsRefreshKey = 0, onBack, onNewApplicationClick, onApplicationsUpdated }) => {
+const ClientDetail: React.FC<ClientDetailProps> = ({ client, advisors = [], applicationsRefreshKey = 0, onBack, onNewApplicationClick, onApplicationsUpdated, onOpenApplication }) => {
   const [activeTab, setActiveTab] = useState('applications');
   const [isEditing, setIsEditing] = useState(false);
   const [applications, setApplications] = useState<Application[]>([]);
   const [isLoadingApplications, setIsLoadingApplications] = useState(true);
-  const [editingApplication, setEditingApplication] = useState<Application | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -125,22 +123,6 @@ const ClientDetail: React.FC<ClientDetailProps> = ({ client, advisors = [], appl
     { id: 'activities', label: 'Activities' },
     { id: 'audit', label: 'Audit Trail' },
   ];
-
-  if (editingApplication && editingApplication.status === ApplicationStatus.Draft) {
-    return (
-      <LoanApplicationForm
-        client={client}
-        draftApplication={{ id: editingApplication.id, referenceNumber: editingApplication.referenceNumber }}
-        isEditMode={true}
-        onBack={() => setEditingApplication(null)}
-        onApplicationsUpdated={onApplicationsUpdated}
-        onSuccess={() => {
-          setEditingApplication(null);
-          onApplicationsUpdated?.();
-        }}
-      />
-    );
-  }
 
   return (
     <div className="bg-white dark:bg-gray-800 shadow-md rounded-lg">
@@ -363,17 +345,15 @@ const ClientDetail: React.FC<ClientDetailProps> = ({ client, advisors = [], appl
                     {applications.map(app => (
                       <li
                         key={app.id}
-                        onClick={() => app.status === ApplicationStatus.Draft && setEditingApplication(app)}
-                        className={`flex justify-between items-center p-3 rounded-lg ${app.status === ApplicationStatus.Draft ? 'bg-gray-50 dark:bg-gray-700/50 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors' : 'bg-gray-50 dark:bg-gray-700/50'}`}
+                        onClick={() => onOpenApplication?.(app.id)}
+                        className="flex justify-between items-center p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                       >
                         <div>
                           <p className="font-semibold">{app.referenceNumber}</p>
                           <p className="text-sm text-gray-500 dark:text-gray-400">{app.lender} · ${app.loanAmount.toLocaleString()}</p>
                           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{app.status}</p>
                         </div>
-                        {app.status === ApplicationStatus.Draft && (
-                          <span className="text-xs text-primary-600 dark:text-primary-400 font-medium">Click to edit</span>
-                        )}
+                        <span className="text-xs text-primary-600 dark:text-primary-400 font-medium">View</span>
                       </li>
                     ))}
                   </ul>

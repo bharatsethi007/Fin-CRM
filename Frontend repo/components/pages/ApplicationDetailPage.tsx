@@ -2001,6 +2001,118 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
       ? `${((loanAmountNum / propertyValueNum) * 100).toFixed(1)}%`
       : '—';
 
+  const [propertySearchTerm, setPropertySearchTerm] = useState('');
+  const [propertySearchResults, setPropertySearchResults] = useState<any[]>([]);
+  const [propertySearching, setPropertySearching] = useState(false);
+  const [propertyAddressField, setPropertyAddressField] = useState(detail?.property_address as string || '');
+  const [propertySuburbField, setPropertySuburbField] = useState((detail as any)?.property_suburb || '');
+  const [propertyCityField, setPropertyCityField] = useState((detail as any)?.property_city || '');
+  const [propertyRegionField, setPropertyRegionField] = useState((detail as any)?.property_region || '');
+  const [propertyPostcodeField, setPropertyPostcodeField] = useState((detail as any)?.property_postcode || '');
+  const [propertyTypeField, setPropertyTypeField] = useState<string>((detail as any)?.property_type || '');
+  const [zoningField, setZoningField] = useState<string>((detail as any)?.zoning || '');
+  const [propertyCvField, setPropertyCvField] = useState<number | ''>(
+    (detail?.property_value != null ? Number(detail.property_value) : '') as number | ''
+  );
+  const [valuationTypeField, setValuationTypeField] = useState<string>((detail as any)?.valuation_type || '');
+  const [landAreaField, setLandAreaField] = useState<number | ''>(((detail as any)?.land_area_m2 as number) || '');
+  const [titleNumberField, setTitleNumberField] = useState<string>((detail as any)?.title_number || '');
+  const [legalDescriptionField, setLegalDescriptionField] = useState<string>((detail as any)?.legal_description || '');
+
+  useEffect(() => {
+    setPropertyAddressField(detail?.property_address as string || '');
+    setPropertySuburbField((detail as any)?.property_suburb || '');
+    setPropertyCityField((detail as any)?.property_city || '');
+    setPropertyRegionField((detail as any)?.property_region || '');
+    setPropertyPostcodeField((detail as any)?.property_postcode || '');
+    setPropertyTypeField((detail as any)?.property_type || '');
+    setZoningField((detail as any)?.zoning || '');
+    setPropertyCvField((detail?.property_value != null ? Number(detail.property_value) : '') as number | '');
+    setValuationTypeField((detail as any)?.valuation_type || '');
+    setLandAreaField(((detail as any)?.land_area_m2 as number) || '');
+    setTitleNumberField((detail as any)?.title_number || '');
+    setLegalDescriptionField((detail as any)?.legal_description || '');
+  }, [detail?.id]);
+
+  const handleSearchProperty = async () => {
+    const term = propertySearchTerm.trim();
+    if (!term) return;
+    const apiKey = import.meta.env.VITE_LINZ_API_KEY;
+    if (!apiKey) {
+      setToastMessage('LINZ API key is not configured (VITE_LINZ_API_KEY).');
+      return;
+    }
+    setPropertySearching(true);
+    try {
+      const url = `https://data.linz.govt.nz/services/query/v1/search.json?key=${encodeURIComponent(
+        apiKey
+      )}&tables=50772&q=${encodeURIComponent(term)}&limit=10`;
+      const res = await fetch(url);
+      const json = await res.json();
+      const rows = json?.rows || [];
+      setPropertySearchResults(rows);
+    } catch (err) {
+      console.error('Failed to search LINZ addresses:', err);
+      setToastMessage('Failed to search LINZ addresses');
+    } finally {
+      setPropertySearching(false);
+    }
+  };
+
+  const handleSelectPropertyResult = (row: any) => {
+    const fullAddress =
+      row.full_address ||
+      row.address ||
+      row.formatted_address ||
+      [row.address_line_1, row.address_line_2, row.town_city, row.region].filter(Boolean).join(', ');
+    const suburb = row.suburb_locality || row.suburb || row.locality || '';
+    const city = row.town_city || row.city || '';
+    const region = row.region || row.region_name || '';
+    const postcode = row.postcode || row.post_code || '';
+    const title = row.title_no || row.title_number || '';
+    const landArea =
+      row.land_area || row.area || row.parcel_area || row.land_area_m2 || null;
+
+    setPropertySearchTerm(fullAddress || '');
+    setPropertyAddressField(fullAddress || '');
+    setPropertySuburbField(suburb);
+    setPropertyCityField(city);
+    setPropertyRegionField(region);
+    setPropertyPostcodeField(postcode);
+    setTitleNumberField(title || '');
+    setLandAreaField(landArea != null ? Number(landArea) : '');
+  };
+
+  const handleSavePropertyDetails = async () => {
+    setSavingLending(true);
+    try {
+      const payload: Record<string, unknown> = {
+        property_address: propertyAddressField || null,
+        property_suburb: propertySuburbField || null,
+        property_city: propertyCityField || null,
+        property_region: propertyRegionField || null,
+        property_postcode: propertyPostcodeField || null,
+        property_type: propertyTypeField || null,
+        zoning: zoningField || null,
+        property_value: propertyCvField === '' ? null : Number(propertyCvField) || null,
+        valuation_type: valuationTypeField || null,
+        land_area_m2: landAreaField === '' ? null : Number(landAreaField) || null,
+        title_number: titleNumberField || null,
+        legal_description: legalDescriptionField || null,
+      };
+      await applicationService.updateApplication(application.id, payload);
+      const updated = (await applicationService.getApplicationById(application.id)) as ApplicationDetailRow;
+      setDetail(updated);
+      onUpdate();
+      setToastMessage('Property details saved');
+    } catch (err) {
+      console.error('Failed to save property details:', err);
+      setToastMessage('Failed to save property details');
+    } finally {
+      setSavingLending(false);
+    }
+  };
+
   const renderOverview = () => {
     if (loading) {
       return (
@@ -2276,55 +2388,7 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
           </form>
         </Card>
 
-        {/* NZ Interest Rates Table */}
-        <Card className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center">
-              <Icon name="Percent" className="h-5 w-5 mr-2 text-primary-500 dark:text-primary-400" />
-              Current Interest Rates
-            </h3>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => crmService.getCurrentInterestRates().then((r) => setInterestRates(r || []))}
-              leftIcon="RefreshCw"
-            >
-              Refresh
-            </Button>
-          </div>
-          {isLoadingRates ? (
-            <div className="flex justify-center items-center h-24">
-              <Icon name="Loader" className="h-6 w-6 animate-spin text-primary-500 dark:text-primary-400" />
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left text-gray-500 dark:text-gray-400">
-                <thead className="text-xs text-gray-700 dark:text-gray-300 uppercase bg-gray-50 dark:bg-gray-700">
-                  <tr>
-                    <th scope="col" className="px-4 py-2">Lender</th>
-                    {interestRates[0]?.rates.map((rate) => (
-                      <th key={rate.term} scope="col" className="px-4 py-2 text-center">
-                        {rate.term}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                  {interestRates.map((bank) => (
-                    <tr key={bank.lender} className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 last:border-b-0">
-                      <td className="px-4 py-2 font-semibold text-gray-900 dark:text-white">{bank.lender}</td>
-                      {bank.rates.map((rate) => (
-                        <td key={rate.term} className="px-4 py-2 text-center">
-                          {rate.rate.toFixed(2)}%
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
+     
 
         {/* AI Lender Recommendation */}
         <div className="relative rounded-lg overflow-hidden">

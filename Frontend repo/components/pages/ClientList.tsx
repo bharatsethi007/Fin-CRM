@@ -10,9 +10,10 @@ import AddClientForm from './AddClientForm';
 interface ClientListProps {
   initialClientId: string | null;
   clearInitialClientId: () => void;
+  navigateToApplication?: (applicationId: string) => void;
 }
 
-const ClientList: React.FC<ClientListProps> = ({ initialClientId, clearInitialClientId }) => {
+const ClientList: React.FC<ClientListProps> = ({ initialClientId, clearInitialClientId, navigateToApplication }) => {
   const [clients, setClients] = useState<Client[]>([]);
   const [advisors, setAdvisors] = useState<Advisor[]>([]);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -97,13 +98,14 @@ if (clientForNewApplication && draftApplication) {
 
   if (selectedClient) {
     return (
-      <ClientDetail 
+      <ClientDetail
         client={selectedClient}
         advisors={advisors}
         applicationsRefreshKey={applicationsRefreshKey}
-        onBack={() => setSelectedClient(null)} 
+        onBack={() => setSelectedClient(null)}
         onNewApplicationClick={() => handleNewApplication(selectedClient)}
         onApplicationsUpdated={() => setApplicationsRefreshKey(k => k + 1)}
+        onOpenApplication={navigateToApplication}
       />
     );
   }
@@ -151,7 +153,11 @@ if (clientForNewApplication && draftApplication) {
               {filteredClients.map(client => {
                 const owner = advisors.find(a => a.id === client.advisorId);
                 return (
-                  <tr key={client.id} className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600">
+                  <tr
+                    key={client.id}
+                    onClick={() => setSelectedClient(client)}
+                    className="bg-white dark:bg-gray-800 border-b dark:border-gray-700 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700"
+                  >
                     <td className="px-6 py-4 font-medium text-gray-900 dark:text-white whitespace-nowrap">
                       <div className="flex items-center">
                           <img src={client.avatarUrl} alt={client.name} className="h-8 w-8 rounded-full mr-3" />
@@ -175,7 +181,7 @@ if (clientForNewApplication && draftApplication) {
                         )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-right">
+                    <td className="px-6 py-4 text-right" onClick={(e) => e.stopPropagation()}>
                       <Button variant="ghost" size="sm" onClick={() => setSelectedClient(client)}>View</Button>
                     </td>
                   </tr>

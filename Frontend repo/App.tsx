@@ -193,7 +193,13 @@ const App: React.FC = () => {
                     />
                 );
             case 'clients':
-                return <ClientList initialClientId={initialClientId} clearInitialClientId={() => setInitialClientId(null)} />;
+                return (
+                    <ClientList
+                        initialClientId={initialClientId}
+                        clearInitialClientId={() => setInitialClientId(null)}
+                        navigateToApplication={navigateToApplication}
+                    />
+                );
             case 'leads':
                 return <LeadPipeline />;
             case 'applications':
