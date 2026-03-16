@@ -4,6 +4,7 @@ import { Button } from '../common/Button';
 import { Icon, IconName } from '../common/Icon';
 import { Card } from '../common/Card';
 import { NeedsObjectivesTab } from '../applications/NeedsObjectivesTab';
+import { ComplianceChecklist } from '../compliance/ComplianceChecklist';
 import { applicationService, type Applicant, type Company, type Income, type Expense, type Asset, type Liability } from '../../services/applicationService';
 import { supabase } from '../../services/supabaseClient';
 import { OverviewTab } from '../applications/OverviewTab';
@@ -59,6 +60,7 @@ const TABS: { id: string; name: string; icon: IconName }[] = [
   { id: 'liabilities', name: 'Liabilities', icon: 'Landmark' },
   { id: 'documents', name: 'Documents', icon: 'FilePlus2' },
   { id: 'needs', name: 'Needs & Objectives', icon: 'Target' },
+  { id: 'compliance', name: 'Compliance', icon: 'Shield' },
 ];
 
 const WORKFLOW_PILL_CLASSES: Record<string, string> = {
@@ -4580,6 +4582,8 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
         return renderDocumentsTab();
       case 'needs':
         return <NeedsObjectivesTab applicationId={application.id} firmId={application.firm_id} />;
+      case 'compliance':
+        return <ComplianceChecklist applicationId={application.id} />;
       default:
         return null;
     }
