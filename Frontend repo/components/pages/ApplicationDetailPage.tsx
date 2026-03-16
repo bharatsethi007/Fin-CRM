@@ -1379,7 +1379,26 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
     setStatementParsing(true);
     setStatementParsePhase(0);
     try {
-      const fileContent = await readFile(statementFile);
+      const isPdf = statementFile.name.toLowerCase().endsWith('.pdf') || statementFile.type === 'application/pdf';
+      let fileContent: string;
+      if (isPdf) {
+        fileContent = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const base64 = (e.target?.result as string).split(',')[1];
+            resolve(base64 ?? '');
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(statementFile);
+        });
+      } else {
+        fileContent = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (e) => resolve((e.target?.result as string) || '');
+          reader.onerror = reject;
+          reader.readAsText(statementFile);
+        });
+      }
       const { data: { session } } = await supabase.auth.getSession();
       const response = await fetch(
         'https://lfhaaqjinpbkozaoblyo.supabase.co/functions/v1/parse-bank-statement',
@@ -1390,10 +1409,7 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
             'Authorization': `Bearer ${session?.access_token}`,
             'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
           },
-          body: JSON.stringify({
-            fileContent,
-            fileType: statementFile.type,
-          }),
+          body: JSON.stringify({ fileContent, isPdf }),
         }
       );
       const result = await response.json();
