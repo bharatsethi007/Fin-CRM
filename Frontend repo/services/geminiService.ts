@@ -76,6 +76,64 @@ export const getDashboardAIInsights = async (data: SanitizedDashboardData): Prom
   return response.text ?? '';
 };
 
+const BANK_STATEMENT_PROMPT = `You are a NZ mortgage broker assistant analysing a bank statement.
+Analyse this bank statement and calculate the average MONTHLY spending for each category.
+Return ONLY a valid JSON object with no markdown, no backticks, no explanation.
+Use exactly these field names and return monthly dollar amounts as numbers:
+{
+  "household_name": "Parsed from Statement",
+  "food_groceries": 0,
+  "dining_takeaway": 0,
+  "alcohol_tobacco": 0,
+  "entertainment": 0,
+  "holidays_travel": 0,
+  "clothing_personal": 0,
+  "grooming_beauty": 0,
+  "phone_internet": 0,
+  "streaming_subscriptions": 0,
+  "gifts_donations": 0,
+  "pets": 0,
+  "other_discretionary": 0,
+  "childcare": 0,
+  "school_fees_public": 0,
+  "school_fees_private": 0,
+  "tertiary_education": 0,
+  "health_insurance": 0,
+  "medical_dental": 0,
+  "gym_sports": 0,
+  "life_insurance": 0,
+  "income_protection": 0,
+  "vehicle_running_costs": 0,
+  "vehicle_insurance": 0,
+  "public_transport": 0,
+  "rates": 0,
+  "body_corporate": 0,
+  "home_insurance": 0,
+  "utilities": 0,
+  "rent_board": 0,
+  "property_maintenance": 0,
+  "child_support": 0,
+  "spousal_maintenance": 0,
+  "other_regular_commitments": 0,
+  "expense_frequency": "monthly",
+  "total_monthly": 0
+}
+Also identify any regular income credits and loan repayments and include them in other_regular_commitments if they appear to be debt repayments.
+
+Statement content:`;
+
+/** Parse bank statement (CSV text or PDF base64) and return raw JSON string. Caller must JSON.parse. */
+export const parseBankStatement = async (statementContent: string, isPdf?: boolean): Promise<string> => {
+  const ai = getAi();
+  if (!ai) throw new Error('Gemini API key is not configured.');
+  const fullPrompt = BANK_STATEMENT_PROMPT + '\n\n' + statementContent;
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: fullPrompt,
+  });
+  return response.text ?? '';
+};
+
 const getLenderRecommendation = async (
   client: Client,
   lendingDetails: { loanAmount: number; purpose: string; term: number },
@@ -321,6 +379,25 @@ Application data (all PII removed): ${sanitisedApplicationData}`;
   }
 };
 
+const generateContent = async (prompt: string): Promise<string> => {
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!apiKey) throw new Error('Gemini API key is not configured. Set VITE_GEMINI_API_KEY in .env');
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+      }),
+    }
+  );
+  const data = await response.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (text == null) throw new Error(data?.error?.message || 'Invalid response from Gemini');
+  return text;
+};
+
 export const geminiService = {
   getDashboardInsights,
   getDashboardAIInsights,
@@ -328,4 +405,6 @@ export const geminiService = {
   summarizeAndExtractActions,
   analyzeCompliance,
   generateStatementOfAdvice,
+  generateContent,
+  parseBankStatement,
 };

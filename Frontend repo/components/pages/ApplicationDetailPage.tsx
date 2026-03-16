@@ -8,6 +8,18 @@ import { Card } from '../common/Card';
 import { applicationService, type Applicant, type Company, type Income, type Expense, type Asset, type Liability } from '../../services/applicationService';
 import { crmService, noteService, authService } from '../../services/api';
 import { geminiService, type StatementOfAdviceResponse } from '../../services/geminiService';
+import { supabase } from '../../services/supabaseClient';
+
+/** For Review Parsed Expenses modal: category key, label, section */
+const PARSED_EXPENSE_SECTIONS: { section: string; keys: string[]; labels: Record<string, string> }[] = [
+  { section: 'Food', keys: ['food_groceries', 'dining_takeaway', 'alcohol_tobacco'], labels: { food_groceries: 'Food & Groceries', dining_takeaway: 'Dining & Takeaway', alcohol_tobacco: 'Alcohol & Tobacco' } },
+  { section: 'Discretionary', keys: ['entertainment', 'holidays_travel', 'clothing_personal', 'grooming_beauty', 'phone_internet', 'streaming_subscriptions', 'gifts_donations', 'pets', 'other_discretionary'], labels: { entertainment: 'Entertainment', holidays_travel: 'Holidays & Travel', clothing_personal: 'Clothing & Personal', grooming_beauty: 'Grooming & Beauty', phone_internet: 'Phone & Internet', streaming_subscriptions: 'Streaming & Subscriptions', gifts_donations: 'Gifts & Donations', pets: 'Pets', other_discretionary: 'Other Discretionary' } },
+  { section: 'Children', keys: ['childcare', 'school_fees_public', 'school_fees_private', 'tertiary_education'], labels: { childcare: 'Childcare', school_fees_public: 'School Fees (Public)', school_fees_private: 'School Fees (Private)', tertiary_education: 'Tertiary Education' } },
+  { section: 'Health', keys: ['health_insurance', 'medical_dental', 'gym_sports', 'life_insurance', 'income_protection'], labels: { health_insurance: 'Health Insurance', medical_dental: 'Medical & Dental', gym_sports: 'Gym & Sports', life_insurance: 'Life Insurance', income_protection: 'Income Protection' } },
+  { section: 'Transport', keys: ['vehicle_running_costs', 'vehicle_insurance', 'public_transport'], labels: { vehicle_running_costs: 'Vehicle Running Costs', vehicle_insurance: 'Vehicle Insurance', public_transport: 'Public Transport' } },
+  { section: 'Housing', keys: ['rates', 'body_corporate', 'home_insurance', 'utilities', 'rent_board', 'property_maintenance'], labels: { rates: 'Rates', body_corporate: 'Body Corporate', home_insurance: 'Home Insurance', utilities: 'Utilities', rent_board: 'Rent & Board', property_maintenance: 'Property Maintenance' } },
+  { section: 'Other', keys: ['child_support', 'spousal_maintenance', 'other_regular_commitments'], labels: { child_support: 'Child Support', spousal_maintenance: 'Spousal Maintenance', other_regular_commitments: 'Other Regular Commitments' } },
+];
 
 type ApplicationDetailRow = {
   id: string;
@@ -278,6 +290,15 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [expenseFormError, setExpenseFormError] = useState<string | null>(null);
   const [submittingExpense, setSubmittingExpense] = useState(false);
+  const [showStatementParseModal, setShowStatementParseModal] = useState(false);
+  const [showStatementReviewModal, setShowStatementReviewModal] = useState(false);
+  const [statementFile, setStatementFile] = useState<File | null>(null);
+  const [statementParseError, setStatementParseError] = useState<string | null>(null);
+  const [statementParsePhase, setStatementParsePhase] = useState(0);
+  const [statementParsing, setStatementParsing] = useState(false);
+  const [parsedExpenseData, setParsedExpenseData] = useState<Record<string, number | string> | null>(null);
+  const [reviewExpenseEdits, setReviewExpenseEdits] = useState<Record<string, number>>({});
+  const [savingParsedExpenses, setSavingParsedExpenses] = useState(false);
 
   useEffect(() => {
     if (activeTab === 'expenses' && application.id) {
@@ -1322,6 +1343,137 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
     }
   };
 
+  const STATEMENT_LOADING_MESSAGES = ['Reading your statement...', 'Categorising expenses...', 'Almost done...'];
+  useEffect(() => {
+    if (!statementParsing) return;
+    const t = setInterval(() => {
+      setStatementParsePhase((p) => (p + 1) % 3);
+    }, 2000);
+    return () => clearInterval(t);
+  }, [statementParsing]);
+
+  const readFile = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      if (file.type === 'text/csv' || file.name.toLowerCase().endsWith('.csv')) {
+        reader.onload = (e) => resolve((e.target?.result as string) || '');
+        reader.onerror = reject;
+        reader.readAsText(file);
+      } else if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+        reader.onload = (e) => {
+          const dataUrl = (e.target?.result as string) || '';
+          const base64 = dataUrl.split(',')[1];
+          resolve(base64 ?? '');
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      } else {
+        reject(new Error('Unsupported file type'));
+      }
+    });
+  };
+
+  const handleParseStatement = async () => {
+    if (!statementFile) return;
+    setStatementParseError(null);
+    setStatementParsing(true);
+    setStatementParsePhase(0);
+    try {
+      const fileContent = await readFile(statementFile);
+      const { data: { session } } = await supabase.auth.getSession();
+      const response = await fetch(
+        'https://lfhaaqjinpbkozaoblyo.supabase.co/functions/v1/parse-bank-statement',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session?.access_token}`,
+            'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
+          },
+          body: JSON.stringify({
+            fileContent,
+            fileType: statementFile.type,
+          }),
+        }
+      );
+      const result = await response.json();
+      if (!result.success) {
+        throw new Error(result.error || 'Parsing failed');
+      }
+      const parsed = result.data as Record<string, unknown>;
+      const categoryKeys = [
+        'food_groceries', 'dining_takeaway', 'alcohol_tobacco', 'entertainment', 'holidays_travel', 'clothing_personal', 'grooming_beauty',
+        'phone_internet', 'streaming_subscriptions', 'gifts_donations', 'pets', 'other_discretionary', 'childcare', 'school_fees_public', 'school_fees_private',
+        'tertiary_education', 'health_insurance', 'medical_dental', 'gym_sports', 'life_insurance', 'income_protection', 'vehicle_running_costs', 'vehicle_insurance',
+        'public_transport', 'rates', 'body_corporate', 'home_insurance', 'utilities', 'rent_board', 'property_maintenance', 'child_support', 'spousal_maintenance', 'other_regular_commitments',
+      ];
+      const expenseData: Record<string, number | string> = {
+        household_name: typeof parsed.household_name === 'string' ? parsed.household_name : 'Parsed from Statement',
+        expense_frequency: 'monthly',
+        total_monthly: Number(parsed.total_monthly) || 0,
+      };
+      categoryKeys.forEach((k) => { expenseData[k] = Number(parsed[k]) || 0; });
+      const edits: Record<string, number> = {};
+      categoryKeys.forEach((k) => { edits[k] = Number(parsed[k]) || 0; });
+      setParsedExpenseData(expenseData);
+      setReviewExpenseEdits(edits);
+      setShowStatementReviewModal(true);
+      setShowStatementParseModal(false);
+      setStatementFile(null);
+    } catch (err) {
+      console.error('Parse error:', err);
+      setStatementParseError('Could not parse statement. Please try a different file or enter expenses manually.');
+    } finally {
+      setStatementParsing(false);
+    }
+  };
+
+  const handleSaveParsedExpenses = async () => {
+    if (!parsedExpenseData || !application.id) return;
+    setSavingParsedExpenses(true);
+    try {
+      const payload: Partial<Expense> = {
+        household_name: String(parsedExpenseData.household_name || 'Household'),
+        expense_frequency: 'monthly',
+        total_essential: 0,
+        total_discretionary: 0,
+        total_monthly: 0,
+      };
+      const allKeys = [
+        'food_groceries', 'dining_takeaway', 'alcohol_tobacco', 'entertainment', 'holidays_travel', 'clothing_personal', 'grooming_beauty',
+        'phone_internet', 'streaming_subscriptions', 'gifts_donations', 'pets', 'other_discretionary', 'childcare', 'school_fees_public', 'school_fees_private',
+        'tertiary_education', 'health_insurance', 'medical_dental', 'gym_sports', 'life_insurance', 'income_protection', 'vehicle_running_costs', 'vehicle_insurance',
+        'public_transport', 'rates', 'body_corporate', 'home_insurance', 'utilities', 'rent_board', 'property_maintenance', 'child_support', 'spousal_maintenance', 'other_regular_commitments',
+      ];
+      let total = 0;
+      allKeys.forEach((k) => {
+        const v = reviewExpenseEdits[k] ?? Number(parsedExpenseData[k]) ?? 0;
+        (payload as Record<string, unknown>)[k] = v;
+        total += v;
+      });
+      payload.total_monthly = total;
+      const housing = (reviewExpenseEdits.rates ?? 0) + (reviewExpenseEdits.body_corporate ?? 0) + (reviewExpenseEdits.home_insurance ?? 0) + (reviewExpenseEdits.utilities ?? 0) + (reviewExpenseEdits.rent_board ?? 0) + (reviewExpenseEdits.property_maintenance ?? 0);
+      const transport = (reviewExpenseEdits.vehicle_running_costs ?? 0) + (reviewExpenseEdits.vehicle_insurance ?? 0) + (reviewExpenseEdits.public_transport ?? 0);
+      const health = (reviewExpenseEdits.health_insurance ?? 0) + (reviewExpenseEdits.medical_dental ?? 0) + (reviewExpenseEdits.gym_sports ?? 0) + (reviewExpenseEdits.life_insurance ?? 0) + (reviewExpenseEdits.income_protection ?? 0);
+      const food = (reviewExpenseEdits.food_groceries ?? 0) + (reviewExpenseEdits.dining_takeaway ?? 0) + (reviewExpenseEdits.alcohol_tobacco ?? 0);
+      const disc = (reviewExpenseEdits.entertainment ?? 0) + (reviewExpenseEdits.holidays_travel ?? 0) + (reviewExpenseEdits.clothing_personal ?? 0) + (reviewExpenseEdits.grooming_beauty ?? 0) + (reviewExpenseEdits.phone_internet ?? 0) + (reviewExpenseEdits.streaming_subscriptions ?? 0) + (reviewExpenseEdits.gifts_donations ?? 0) + (reviewExpenseEdits.pets ?? 0) + (reviewExpenseEdits.other_discretionary ?? 0);
+      const children = (reviewExpenseEdits.childcare ?? 0) + (reviewExpenseEdits.school_fees_public ?? 0) + (reviewExpenseEdits.school_fees_private ?? 0) + (reviewExpenseEdits.tertiary_education ?? 0);
+      payload.total_essential = housing + transport + health;
+      payload.total_discretionary = food + disc + children;
+      await applicationService.createExpense(application.id, payload);
+      const data = await applicationService.getExpenses(application.id);
+      setExpenses(data || []);
+      setToastMessage('Expenses imported from bank statement');
+      setShowStatementReviewModal(false);
+      setParsedExpenseData(null);
+      setReviewExpenseEdits({});
+    } catch (err) {
+      setToastMessage(err instanceof Error ? err.message : 'Failed to save expenses');
+    } finally {
+      setSavingParsedExpenses(false);
+    }
+  };
+
   const handleSaveAssetSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!assetForm.asset_type) {
@@ -1965,6 +2117,22 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
                         <span>Generate Advice Summary</span>
                       </>
                     )}
+                  </button>
+                </div>
+                <div className={`ai-button-wrapper${statementParsing ? ' loading' : ''}`}>
+                  <button
+                    type="button"
+                    className="ai-button-inner bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 rounded-md flex items-center gap-2"
+                    onClick={() => {
+                      setActiveTab('expenses');
+                      setStatementFile(null);
+                      setStatementParseError(null);
+                      setShowStatementParseModal(true);
+                    }}
+                    disabled={statementParsing}
+                  >
+                    <Icon name="FileText" className="h-4 w-4" />
+                    <span>✨ Magic Drop</span>
                   </button>
                 </div>
               </div>
@@ -2760,19 +2928,36 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
     }
     return (
       <div className="space-y-6">
-        <div className="flex justify-between items-center">
+        <div className="flex justify-between items-center flex-wrap gap-3">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Household Expenses</h3>
-          <Button
-            leftIcon="PlusCircle"
-            type="button"
-            onClick={() => {
-              setEditingExpense(null);
-              resetExpenseForm();
-              setShowExpensesModal(true);
-            }}
-          >
-            Add Household Expenses
-          </Button>
+          <div className="flex items-center gap-2">
+            <div className={`ai-button-wrapper${statementParsing ? ' loading' : ''}`}>
+              <button
+                type="button"
+                disabled={statementParsing}
+                className="ai-button-inner bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 rounded-md flex items-center gap-2"
+                onClick={() => {
+                  setStatementFile(null);
+                  setStatementParseError(null);
+                  setShowStatementParseModal(true);
+                }}
+              >
+                <Icon name="FileText" className="h-4 w-4" />
+                <span>✨ Magic Drop</span>
+              </button>
+            </div>
+            <Button
+              leftIcon="PlusCircle"
+              type="button"
+              onClick={() => {
+                setEditingExpense(null);
+                resetExpenseForm();
+                setShowExpensesModal(true);
+              }}
+            >
+              Add Household Expenses
+            </Button>
+          </div>
         </div>
 
         {expenses.length === 0 ? (
@@ -2825,6 +3010,114 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
                 </div>
               </Card>
             ))}
+          </div>
+        )}
+
+        {/* AI Statement Parser upload modal */}
+        {showStatementParseModal && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md flex flex-col border border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">AI Statement Parser</h3>
+                {!statementParsing && (
+                  <button type="button" onClick={() => { setShowStatementParseModal(false); setStatementFile(null); setStatementParseError(null); }} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                    <Icon name="X" className="h-5 w-5" />
+                  </button>
+                )}
+              </div>
+              <div className="p-4">
+                {statementParsing ? (
+                  <div className="flex flex-col items-center justify-center py-12">
+                    <Icon name="Loader" className="h-10 w-10 animate-spin text-primary-500 dark:text-primary-400" />
+                    <p className="mt-3 text-sm text-gray-600 dark:text-gray-400">{STATEMENT_LOADING_MESSAGES[statementParsePhase]}</p>
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">Upload a bank statement and AI will automatically categorise your expenses</p>
+                    <div
+                      className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center cursor-pointer hover:border-primary-500 dark:hover:border-primary-400 transition-colors"
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const f = e.dataTransfer.files[0];
+                        if (f) setStatementFile(f);
+                      }}
+                      onClick={() => document.getElementById('statement-file-input')?.click()}
+                    >
+                      <input
+                        id="statement-file-input"
+                        type="file"
+                        accept=".pdf,.csv,application/pdf,text/csv,text/plain"
+                        className="hidden"
+                        onChange={(e) => { const f = e.target.files?.[0]; if (f) setStatementFile(f); }}
+                      />
+                      <Icon name="Upload" className="h-10 w-10 mx-auto text-gray-400 dark:text-gray-500" />
+                      <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">Drop PDF or CSV here, or click to browse</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">Max 10MB</p>
+                      {statementFile && <p className="mt-2 text-sm font-medium text-primary-600 dark:text-primary-400 truncate">{statementFile.name}</p>}
+                    </div>
+                    {statementParseError && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{statementParseError}</p>}
+                    <div className="flex gap-2 mt-4">
+                      <Button variant="secondary" size="sm" onClick={() => { setShowStatementParseModal(false); setStatementFile(null); setStatementParseError(null); }}>Cancel</Button>
+                      <Button size="sm" onClick={handleParseStatement} disabled={!statementFile}>Parse Statement</Button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Review Parsed Expenses modal */}
+        {showStatementReviewModal && parsedExpenseData && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col border border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Review Parsed Expenses</h3>
+                <button type="button" onClick={() => { setShowStatementReviewModal(false); setParsedExpenseData(null); setReviewExpenseEdits({}); }} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                  <Icon name="X" className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="p-4 overflow-y-auto flex-1">
+                {PARSED_EXPENSE_SECTIONS.map(({ section, keys, labels }) => {
+                  const rows = keys.filter((k) => (reviewExpenseEdits[k] ?? Number(parsedExpenseData[k]) ?? 0) > 0);
+                  if (rows.length === 0) return null;
+                  return (
+                    <div key={section} className="mb-4">
+                      <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">{section}</h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {rows.map((key) => (
+                          <div key={key}>
+                            <label className="block text-xs text-gray-500 dark:text-gray-400">{labels[key] ?? key}</label>
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.01}
+                              className={inputClasses}
+                              value={reviewExpenseEdits[key] ?? Number(parsedExpenseData[key]) ?? 0}
+                              onChange={(e) => setReviewExpenseEdits((prev) => ({ ...prev, [key]: Number(e.target.value) || 0 }))}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="mt-4 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg border-t border-gray-200 dark:border-gray-700">
+                  <div className="flex justify-between font-semibold text-gray-900 dark:text-white">
+                    <span>Total Monthly Expenses</span>
+                    <span className="text-primary-600">
+                      $
+                      {PARSED_EXPENSE_SECTIONS.flatMap((s) => s.keys).reduce((sum, k) => sum + (reviewExpenseEdits[k] ?? Number(parsedExpenseData[k]) ?? 0), 0).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2 flex-shrink-0">
+                <Button variant="secondary" size="sm" onClick={() => { setShowStatementReviewModal(false); setParsedExpenseData(null); setReviewExpenseEdits({}); }}>Cancel</Button>
+                <Button size="sm" onClick={handleSaveParsedExpenses} isLoading={savingParsedExpenses}>Save Expenses</Button>
+              </div>
+            </div>
           </div>
         )}
 
