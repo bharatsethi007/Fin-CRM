@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd \"C:\\\\Users\\\\BharatS\\\\advisorflow\\\\Frontend repo\" && npx tsc --noEmit 2>&1 | head -100)",
+      "Bash(cd \"C:\\\\Users\\\\BharatS\\\\advisorflow\\\\Frontend repo\" && npx tsc --noEmit 2>&1 | grep -E \"\\(ApplicationDetailPage|OverviewTab\\)\" | head -50)",
+      "Bash(cd \"C:\\\\Users\\\\BharatS\\\\advisorflow\\\\Frontend repo\" && node -e \"\nconst fs = require\\('fs'\\);\nconst adp = fs.readFileSync\\('components/pages/ApplicationDetailPage.tsx', 'utf8'\\);\nconst ov = fs.readFileSync\\('components/applications/OverviewTab.tsx', 'utf8'\\);\nconsole.log\\('ApplicationDetailPage.tsx lines:', adp.split\\('\\\\n'\\).length\\);\nconsole.log\\('OverviewTab.tsx lines:', ov.split\\('\\\\n'\\).length\\);\n\")",
+      "Bash(cd \"C:\\\\Users\\\\BharatS\\\\advisorflow\\\\Frontend repo\" && npx tsc --noEmit 2>&1 | grep -v \"App.tsx\\\\|ApplicationsPage.tsx\" | head -30)",
+      "Bash(cd \"C:\\\\Users\\\\BharatS\\\\advisorflow\\\\Frontend repo\" && npx tsc --noEmit 2>&1)",
+      "Bash(cd \"C:\\\\Users\\\\BharatS\\\\advisorflow\\\\Frontend repo\" && npx vite build 2>&1 | tail -40)",
+      "Bash(cd \"C:\\\\Users\\\\BharatS\\\\advisorflow\\\\Frontend repo\" && timeout 15 npx vite --port 5174 2>&1 | head -50)",
+      "Bash(curl -s http://localhost:5175 | head -5 2>&1 || curl -s http://localhost:5173 | head -5 2>&1)",
+      "Bash(cd \"C:\\\\Users\\\\BharatS\\\\advisorflow\\\\Frontend repo\" && curl -s \"http://localhost:5181/@fs/c/Users/BharatS/advisorflow/Frontend%20repo/components/pages/ApplicationDetailPage.tsx\" 2>&1 | grep -i \"error\\\\|Error\\\\|SyntaxError\\\\|ReferenceError\" | head -20 || echo \"No errors in output\")",
+      "Bash(cd \"C:\\\\Users\\\\BharatS\\\\advisorflow\\\\Frontend repo\" && node --experimental-vm-modules -e \"\nconst fs = require\\('fs'\\);\nconst code = fs.readFileSync\\('components/applications/OverviewTab.tsx', 'utf8'\\);\n// Check for obvious syntax issues\nconst lines = code.split\\('\\\\n'\\);\n// Count opening/closing braces in JSX\nlet braceCount = 0;\nlet parenCount = 0;\nlines.forEach\\(\\(line, i\\) => {\n  const openBraces = \\(line.match\\(/\\\\{/g\\) || []\\).length;\n  const closeBraces = \\(line.match\\(/\\\\}/g\\) || []\\).length;\n  braceCount += openBraces - closeBraces;\n  const openParens = \\(line.match\\(/\\\\\\(/g\\) || []\\).length;\n  const closeParens = \\(line.match\\(/\\\\\\)/g\\) || []\\).length;\n  parenCount += openParens - closeParens;\n}\\);\nconsole.log\\('Brace balance:', braceCount, 'Paren balance:', parenCount\\);\n\" 2>&1 || echo \"node error\")",
+      "mcp__ide__getDiagnostics",
+      "Bash(cd \"C:\\\\Users\\\\BharatS\\\\advisorflow\\\\Frontend repo\" && curl -s \"http://localhost:5181/components/pages/ApplicationDetailPage.tsx\" 2>&1 | grep \"OverviewTab\" | head -5)",
+      "Bash(cd \"C:\\\\Users\\\\BharatS\\\\advisorflow\\\\Frontend repo\" && curl -s \"http://localhost:5181/@fs/c:/Users/BharatS/advisorflow/Frontend%20repo/components/pages/ApplicationDetailPage.tsx\" 2>&1 | grep -i \"OverviewTab\\\\|error\" | head -10)",
+      "Bash(cd \"C:\\\\Users\\\\BharatS\\\\advisorflow\\\\Frontend repo\" && curl -v \"http://localhost:5181/@fs/c:/Users/BharatS/advisorflow/Frontend%20repo/components/pages/ApplicationDetailPage.tsx\" 2>&1 | tail -20)",
+      "Bash(cd \"C:\\\\Users\\\\BharatS\\\\advisorflow\\\\Frontend repo\" && node -e \"\nconst { execSync } = require\\('child_process'\\);\n// Try to parse OverviewTab as JS with esbuild  \ntry {\n  execSync\\('npx esbuild components/applications/OverviewTab.tsx --bundle=false 2>&1', {stdio: 'pipe'}\\);\n  console.log\\('OverviewTab.tsx esbuild: OK'\\);\n} catch\\(e\\) {\n  console.log\\('OverviewTab.tsx esbuild error:', e.stdout?.toString\\(\\) || e.message\\);\n}\" 2>&1)"
+    ]
+  }
+}
