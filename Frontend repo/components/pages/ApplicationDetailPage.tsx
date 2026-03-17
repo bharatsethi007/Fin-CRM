@@ -5,6 +5,7 @@ import { Icon, IconName } from '../common/Icon';
 import { Card } from '../common/Card';
 import { NeedsObjectivesTab } from '../applications/NeedsObjectivesTab';
 import { ComplianceChecklist } from '../compliance/ComplianceChecklist';
+import { AuditTrail } from '../compliance/AuditTrail';
 import { applicationService, type Applicant, type Company, type Income, type Expense, type Asset, type Liability } from '../../services/applicationService';
 import { supabase } from '../../services/supabaseClient';
 import { OverviewTab } from '../applications/OverviewTab';
@@ -4583,7 +4584,12 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
       case 'needs':
         return <NeedsObjectivesTab applicationId={application.id} firmId={application.firm_id} />;
       case 'compliance':
-        return <ComplianceChecklist applicationId={application.id} />;
+        return (
+          <div className="space-y-6">
+            <ComplianceChecklist applicationId={application.id} />
+            <AuditTrail applicationId={application.id} title="Application Audit Trail" />
+          </div>
+        );
       default:
         return null;
     }

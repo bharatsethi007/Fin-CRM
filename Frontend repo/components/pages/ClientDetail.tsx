@@ -7,6 +7,7 @@ import { Icon } from '../common/Icon';
 import { ClientPortalStatus } from '../../types';
 import DocumentsTab from '../common/DocumentsTab';
 import KYCTab from '../common/KYCTab';
+import { AuditTrail } from '../compliance/AuditTrail';
 
 interface ClientDetailProps {
   client: Client;
@@ -368,7 +369,10 @@ const ClientDetail: React.FC<ClientDetailProps> = ({ client, advisors = [], appl
             {activeTab === 'kyc' && (
               <KYCTab clientId={client.id} clientName={client.name} onUpdated={onApplicationsUpdated} />
             )}
-            {activeTab !== 'applications' && activeTab !== 'documents' && activeTab !== 'kyc' && (
+            {activeTab === 'audit' && (
+              <AuditTrail clientId={client.id} title="Client Activity Timeline" />
+            )}
+            {activeTab !== 'applications' && activeTab !== 'documents' && activeTab !== 'kyc' && activeTab !== 'audit' && (
               <p className="text-sm text-gray-500 dark:text-gray-400">{tabs.find(t => t.id === activeTab)?.label} content will appear here.</p>
             )}
           </div>
