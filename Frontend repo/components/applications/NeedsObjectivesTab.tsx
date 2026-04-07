@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { logger } from '../../utils/logger';
 import { supabase } from '../../services/supabaseClient';
 
 interface Props {
@@ -143,7 +144,7 @@ export const NeedsObjectivesTab: React.FC<Props> = ({ applicationId, firmId }) =
         );
 
       if (error) {
-        console.error('Save error:', error);
+        logger.error('Save error:', error);
         alert('Error saving: ' + error.message);
         return;
       }
@@ -151,7 +152,7 @@ export const NeedsObjectivesTab: React.FC<Props> = ({ applicationId, firmId }) =
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (e: unknown) {
-      console.error('Unexpected error:', e);
+      logger.error('Unexpected error:', e);
       alert('Error: ' + (e instanceof Error ? e.message : 'Unexpected error saving'));
     } finally {
       setSaving(false);

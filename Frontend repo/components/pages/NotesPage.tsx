@@ -1,5 +1,6 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { logger } from '../../utils/logger';
 import { crmService } from '../../services/api';
 import type { Note, Client, Lead } from '../../types';
 import { Button } from '../common/Button';
@@ -17,7 +18,7 @@ const NotesPage: React.FC = () => {
     const [selectedNote, setSelectedNote] = useState<Note | null>(null);
     const [clients, setClients] = useState<Client[]>([]);
 
-    const fetchNotes = async () => {
+    const fetchNotes = useCallback(async () => {
         setIsLoading(true);
         try {
             const [fetchedNotes, fetchedClients] = await Promise.all([
@@ -31,15 +32,15 @@ const NotesPage: React.FC = () => {
             );
             setClients(fetchedClients);
         } catch (error) {
-            console.error("Failed to fetch notes:", error);
+            logger.error("Failed to fetch notes:", error);
         } finally {
             setIsLoading(false);
         }
-    };
+    }, []);
 
     useEffect(() => {
-        fetchNotes();
-    }, []);
+        void fetchNotes();
+    }, [fetchNotes]);
 
     const handleSelectRecord = (record: Record) => {
         setSelectedRecord(record);

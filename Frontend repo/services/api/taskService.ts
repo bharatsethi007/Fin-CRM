@@ -1,4 +1,5 @@
 import type { Task } from '../../types';
+import { logger } from '../../utils/logger';
 import { supabase } from '../supabaseClient';
 import { authService } from './authService';
 
@@ -64,7 +65,7 @@ export const taskService = {
             };
         });
     } catch (err) {
-        console.error('Failed to load tasks:', err);
+        logger.error('Failed to load tasks:', err);
         return [];
     }
   },
@@ -188,7 +189,7 @@ export const taskService = {
       .eq('firm_id', currentFirm.id);
 
     if (error) {
-      console.error('Error updating task:', error);
+      logger.error('Error updating task:', error);
       throw new Error(error.message);
     }
   },
@@ -206,7 +207,7 @@ export const taskService = {
       .eq('firm_id', currentFirm.id);
 
     if (error) {
-      console.error('Error deleting task:', error);
+      logger.error('Error deleting task:', error);
       throw new Error(error.message);
     }
   },

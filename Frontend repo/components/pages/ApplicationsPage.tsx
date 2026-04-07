@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { logger } from '../../utils/logger';
 import { getCurrentFirm } from '../../services/api';
 import { crmService } from '../../services/api';
-import { applicationService } from '../../services/applicationService';
+import { applicationService } from '../../services/api';
+import { useToast } from '../../hooks/useToast';
+import { useAutoRefresh } from '../hooks/useAutoRefresh';
 import type { Application, Client } from '../../types';
 import { ApplicationStatus, ClientPortalStatus } from '../../types';
 import { Button } from '../common/Button';
@@ -48,10 +51,14 @@ interface ApplicationsPageProps {
   onClearInitialApplicationId?: () => void;
 }
 
+const ANOMALY_FILTER_KEY = 'fi_anomaly_application_ids';
+
 export default function ApplicationsPage({ initialApplicationId, onClearInitialApplicationId }: ApplicationsPageProps) {
+  const toast = useToast();
   const [rows, setRows] = useState<AppRow[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
+  const [anomalyFilterIds, setAnomalyFilterIds] = useState<string[] | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [modalClientId, setModalClientId] = useState('');
   const [modalApplicationType, setModalApplicationType] = useState<typeof APPLICATION_TYPES[number]>('purchase');
@@ -117,21 +124,52 @@ export default function ApplicationsPage({ initialApplicationId, onClearInitialA
       crmService.getClients(),
     ])
       .then(([apps, clientsData]) => {
-        setRows(apps || []);
+        const list = apps || [];
+        setRows(list);
         setClients(clientsData || []);
-        if (initialApplicationId && (apps || []).length > 0) {
-          const row = (apps || []).find((r: AppRow) => r.id === initialApplicationId);
+        setSelectedRow((prev) => {
+          if (!prev) return prev;
+          const next = list.find((r: AppRow) => r.id === prev.id);
+          return next ?? prev;
+        });
+        if (initialApplicationId && list.length > 0) {
+          const row = list.find((r: AppRow) => r.id === initialApplicationId);
           if (row) setSelectedRow(row);
           onClearInitialApplicationId?.();
         }
       })
-      .catch((err) => console.error('Failed to fetch applications:', err))
+      .catch((err) => logger.error('Failed to fetch applications:', err))
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     fetchData();
   }, []);
+
+  useAutoRefresh(fetchData, 30);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(ANOMALY_FILTER_KEY);
+      if (!raw) return;
+      const ids = JSON.parse(raw) as unknown;
+      if (Array.isArray(ids) && ids.every((x) => typeof x === 'string')) {
+        setAnomalyFilterIds(ids);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const clearAnomalyFilter = () => {
+    sessionStorage.removeItem(ANOMALY_FILTER_KEY);
+    setAnomalyFilterIds(null);
+  };
+
+  const displayRows =
+    anomalyFilterIds && anomalyFilterIds.length > 0
+      ? rows.filter((r) => anomalyFilterIds.includes(r.id))
+      : rows;
 
   const clientName = (row: AppRow) =>
     row.clients
@@ -172,8 +210,11 @@ export default function ApplicationsPage({ initialApplicationId, onClearInitialA
       setModalLoanAmount('');
       setSelectedRow(fullRow);
       fetchData();
+      toast.success('Application created');
     } catch (err) {
-      setModalError(err instanceof Error ? err.message : 'Could not create application.');
+      const msg = err instanceof Error ? err.message : 'Could not create application.';
+      setModalError(msg);
+      toast.error(msg);
     } finally {
       setSubmitting(false);
     }
@@ -202,6 +243,22 @@ export default function ApplicationsPage({ initialApplicationId, onClearInitialA
         </Button>
       </div>
 
+      {anomalyFilterIds && anomalyFilterIds.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+          <span>
+            Showing applications with <strong>open anomalies</strong> ({displayRows.length} match
+            {displayRows.length === 1 ? '' : 'es'}).
+          </span>
+          <button
+            type="button"
+            onClick={clearAnomalyFilter}
+            className="font-medium text-amber-800 underline hover:text-amber-950 dark:text-amber-200"
+          >
+            Show all applications
+          </button>
+        </div>
+      )}
+
       <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow overflow-hidden">
         {loading ? (
           <div className="flex justify-center items-center py-24">
@@ -222,14 +279,16 @@ export default function ApplicationsPage({ initialApplicationId, onClearInitialA
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                {rows.length === 0 && (
+                {displayRows.length === 0 && (
                   <tr>
                     <td colSpan={7} className="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
-                      No applications yet. Create one with New Application.
+                      {rows.length === 0
+                        ? 'No applications yet. Create one with New Application.'
+                        : 'No applications match this filter.'}
                     </td>
                   </tr>
                 )}
-                {rows.map((row) => (
+                {displayRows.map((row) => (
                   <tr
                     key={row.id}
                     onClick={() => setSelectedRow(row)}

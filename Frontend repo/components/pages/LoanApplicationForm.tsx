@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { logger } from '../../utils/logger';
 import type { Client, Document, AIRecommendationResponse, OneRoofPropertyDetails, BankRates } from '../../types';
 import { Button } from '../common/Button';
 import { Icon, IconName } from '../common/Icon';
@@ -62,7 +63,7 @@ const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, draft
             await crmService.saveLenderRecommendation(client.id, fullRecommendation);
             setAiRecommendation(fullRecommendation);
         } catch (error) {
-            console.error(error);
+            logger.error(error);
             setRecommendationError('Failed to generate AI recommendation. Please try again.');
         } finally {
             setIsRecommending(false);
@@ -110,7 +111,7 @@ const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, draft
                     setRecommendationError(null);
                 }
             } catch (error) {
-                console.error("Failed to fetch initial data:", error);
+                logger.error("Failed to fetch initial data:", error);
                 setRecommendationError("Failed to load initial application data.");
             } finally {
                 setIsLoadingDocs(false);
@@ -141,7 +142,7 @@ const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, draft
             const details = await crmService.getOneRoofPropertyDetails(propertyAddress);
             setPropertyDetails(details);
         } catch (error) {
-            console.error("Failed to fetch property details", error);
+            logger.error("Failed to fetch property details", error);
         } finally {
             setIsSearchingProperty(false);
         }
@@ -169,7 +170,7 @@ const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, draft
             setSaveSuccessMessage('Draft saved');
             setTimeout(() => setSaveSuccessMessage(''), 2000);
         } catch (error) {
-            console.error("Failed to save draft:", error);
+            logger.error("Failed to save draft:", error);
             alert("Could not save draft. Please try again.");
         } finally {
             setIsSavingDraft(false);
@@ -191,7 +192,7 @@ const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, draft
             });
             onSuccess ? onSuccess() : onBack();
         } catch (error) {
-            console.error("Failed to submit application:", error);
+            logger.error("Failed to submit application:", error);
             alert("Could not submit application. Please try again.");
         } finally {
             setIsSubmitting(false);

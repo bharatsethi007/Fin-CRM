@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { logger } from '../../utils/logger';
 import { crmService } from '../../services/api';
 import type { Client, Lead } from '../../types';
 import { Icon } from './Icon';
@@ -30,7 +31,7 @@ export const ChooseRecordModal: React.FC<ChooseRecordModalProps> = ({ isOpen, on
           setIsLoading(false);
         })
         .catch(err => {
-            console.error("Failed to fetch records:", err);
+            logger.error("Failed to fetch records:", err);
             setIsLoading(false);
         });
     }

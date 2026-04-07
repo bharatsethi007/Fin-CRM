@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { logger } from '../../utils/logger';
 import { crmService } from '../../services/api';
 import type { Client, Advisor, Application } from '../../types';
 import { Button } from '../common/Button';
 import { Icon } from '../common/Icon';
 import ClientDetail from './ClientDetail';
 import LoanApplicationForm from './LoanApplicationForm';
-import AddClientForm from './AddClientForm';
+import AddClientSmart from './AddClientSmart';
 
 interface ClientListProps {
   initialClientId: string | null;
@@ -33,7 +34,7 @@ const ClientList: React.FC<ClientListProps> = ({ initialClientId, clearInitialCl
       setClients(clientsData);
       setAdvisors(advisorsData);
     }).catch(error => {
-      console.error("Failed to load client list data:", error);
+      logger.error("Failed to load client list data:", error);
     }).finally(() => {
       setIsLoading(false);
     });
@@ -63,16 +64,23 @@ const ClientList: React.FC<ClientListProps> = ({ initialClientId, clearInitialCl
       setClientForNewApplication(client);
       setSelectedClient(null);
     } catch (error) {
-      console.error("Failed to create draft application:", error);
+      logger.error("Failed to create draft application:", error);
       alert("Could not create a draft application. Please try again.");
     }
   };
 
 if (showAddModal) {
-  return <AddClientForm onBack={() => setShowAddModal(false)} onSuccess={(newClient) => {
-    setClients([newClient, ...clients]);
-    setShowAddModal(false);
-  }} />;
+  return (
+    <div className="bg-white dark:bg-gray-800 shadow-md rounded-lg p-4 md:p-6">
+      <AddClientSmart
+        onBack={() => setShowAddModal(false)}
+        onSuccess={(newClient) => {
+          setClients([newClient, ...clients]);
+          setShowAddModal(false);
+        }}
+      />
+    </div>
+  );
 }
 
 if (clientForNewApplication && draftApplication) {

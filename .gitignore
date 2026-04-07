@@ -32,5 +32,6 @@ lerna-debug.log*
 *.sln
 *.sw?
 
-# Cursor
-.cursor/
+# Local component backups
+*.backup.tsx
+*.bak

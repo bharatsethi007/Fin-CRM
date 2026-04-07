@@ -1,0 +1,28 @@
+---
+description: Advisorflow frontend uses Supabase directly; Nest backend is for future custom APIs
+alwaysApply: true
+---
+
+# Advisorflow architecture
+
+## Frontend (primary app)
+
+- **Location**: `C:\Users\BharatS\advisorflow\Frontend repo`
+- **Stack**: React + TypeScript, Vite
+- **Backend**: **Supabase** as backend-as-a-service, not this Nest API
+- **Client**: Frontend talks to Supabase via `@supabase/supabase-js` (see `services/supabaseClient.ts`)
+
+Supabase provides:
+
+- PostgreSQL database with auto-generated REST APIs
+- Authentication
+- Row Level Security (RLS)
+- Real-time subscriptions
+
+## Nest backend (this repo)
+
+- **Role**: Reserved for **custom backend logic** when needed later.
+- **Current use**: Not used by the frontend right now. Use it when you need custom API endpoints, server-side logic, or workflows that don’t fit Supabase’s client/direct model.
+- **Integration**: When those needs arise, integrate this backend and have the frontend call it (e.g. using `API_BASE_URL` in Frontend repo’s `constants.ts`).
+
+Do not assume the frontend calls this Nest/Express backend by default; assume Supabase-first unless the task is explicitly to add or use custom backend endpoints.

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../../services/supabaseClient';
 import { crmService } from '../../services/api';
 import type { Client, Advisor, Application } from '../../types';
@@ -55,6 +55,15 @@ const ClientDetail: React.FC<ClientDetailProps> = ({ client, advisors = [], appl
     });
     return () => { mounted = false; };
   }, [client.id, applicationsRefreshKey]);
+
+  const defaultApplicationId = useMemo(() => {
+    if (!applications.length) return undefined;
+    const sorted = [...applications].sort(
+      (a, b) => new Date(b.lastUpdated).getTime() - new Date(a.lastUpdated).getTime(),
+    );
+    return sorted[0]?.id;
+  }, [applications]);
+
   const [editData, setEditData] = useState({
     name: client.name,
     email: client.email,
@@ -364,7 +373,12 @@ const ClientDetail: React.FC<ClientDetailProps> = ({ client, advisors = [], appl
               </div>
             )}
             {activeTab === 'documents' && (
-              <DocumentsTab clientId={client.id} clientEmail={client.email} onDocumentsUpdated={onApplicationsUpdated} />
+              <DocumentsTab
+                clientId={client.id}
+                clientEmail={client.email}
+                defaultApplicationId={defaultApplicationId}
+                onDocumentsUpdated={onApplicationsUpdated}
+              />
             )}
             {activeTab === 'kyc' && (
               <KYCTab clientId={client.id} clientName={client.name} onUpdated={onApplicationsUpdated} />

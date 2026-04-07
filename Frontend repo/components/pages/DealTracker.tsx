@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { crmService, getCurrentFirm } from '../../services/api';
-import { applicationService } from '../../services/applicationService';
+import { logger } from '../../utils/logger';
+import { applicationService, crmService, getCurrentFirm } from '../../services/api';
 import type { Application, Client } from '../../types';
 import { ApplicationStatus } from '../../types';
 import { APPLICATION_STATUS_COLUMNS, APPLICATION_STATUS_TO_WORKFLOW } from '../../constants';
@@ -139,6 +139,7 @@ const ApplicationTracker: React.FC = () => {
 
   const fetchData = () => {
     const firm = getCurrentFirm();
+    logger.log('DealTracker fetchData — firm:', firm?.id);
     if (!firm?.id) {
       setApplications([]);
       setClients([]);
@@ -151,11 +152,17 @@ const ApplicationTracker: React.FC = () => {
       crmService.getClients(),
     ])
       .then(([appsData, clientsData]) => {
+        logger.log('DealTracker fetchData — loaded', appsData.length, 'apps,', clientsData.length, 'clients');
         setApplications(appsData);
         setClients(clientsData);
+        setSelectedApplication((prev) => {
+          if (!prev) return prev;
+          const next = appsData.find((a) => a.id === prev.id);
+          return next ?? prev;
+        });
       })
-      .catch(error => {
-        console.error('Failed to fetch data:', error);
+      .catch((error) => {
+        logger.error('DealTracker fetchData FAILED:', error);
       })
       .finally(() => setIsLoading(false));
   };
@@ -174,7 +181,7 @@ const ApplicationTracker: React.FC = () => {
         setSelectedApplication(application);
         setSelectedClient(client);
     } else {
-        console.error("Client not found for application", application);
+        logger.error("Client not found for application", application);
         alert("Could not find the client associated with this application.");
     }
   };
@@ -216,7 +223,7 @@ const ApplicationTracker: React.FC = () => {
       setNewAppLoanAmount('');
       fetchData();
     } catch (err) {
-      console.error('Failed to create application:', err);
+      logger.error('Failed to create application:', err);
       setNewAppError(err instanceof Error ? err.message : 'Could not create application. Please try again.');
     } finally {
       setIsSubmittingNewApp(false);
@@ -261,7 +268,7 @@ const ApplicationTracker: React.FC = () => {
         )
       );
     } catch (err) {
-      console.error('Failed to update application stage:', err);
+      logger.error('Failed to update application stage:', err);
       fetchData();
     } finally {
       setIsUpdating(false);

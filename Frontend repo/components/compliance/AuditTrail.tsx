@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { logger } from '../../utils/logger';
 import { supabase } from '../../services/supabaseClient';
 import { Icon } from '../common/Icon';
 
@@ -44,7 +45,7 @@ export const AuditTrail: React.FC<Props> = ({ applicationId, clientId, title = '
   const [filter, setFilter] = useState('All');
 
   const load = async () => {
-    console.log('AuditTrail loading for applicationId:', applicationId);
+    logger.log('AuditTrail loading for applicationId:', applicationId);
     setLoading(true);
     let query = supabase
       .from('audit_trail')
@@ -59,7 +60,7 @@ export const AuditTrail: React.FC<Props> = ({ applicationId, clientId, title = '
     }
 
     const { data } = await query;
-    console.log('Events loaded:', data?.length, data);
+    logger.log('Events loaded:', data?.length, data);
     setEvents(data || []);
     setLoading(false);
   };

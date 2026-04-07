@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   LayoutDashboard, Users, Briefcase, Contact, CheckSquare, MoreVertical,
-  PlusCircle, Search, Bell, Sun, Moon, ChevronDown, ChevronUp, X, Filter, 
+  PlusCircle, Search, Bell, Sun, Moon, ChevronDown, ChevronUp, ChevronRight, X, Filter, 
   Calendar, ArrowRight, Bot, Send, Loader, Menu, Banknote, Building,
   ArrowLeft, Mail, Phone, Home, TrendingUp, TrendingDown, RefreshCw,
   FileText, Download, Pencil, Edit, FilePlus2, Sparkles, Info, Wifi, Frame,
@@ -10,14 +10,15 @@ import {
   Percent, UserCog, ShieldAlert, ClipboardCheck, FileSignature, PhoneCall, Mic, Square,
   Paintbrush, Database, UserPlus, Settings, Gem, CreditCard, Code2, Headset, 
   DatabaseBackup, AppWindow, KeyRound, HelpCircle, Command, BarChart3, Play,
-  GitFork, Star, Building2, DollarSign,   List, Plus, Share2, FolderPlus, Folder, Upload, Trash2
+  GitFork, Star, Building2, DollarSign, CircleDollarSign, List, Plus, Share2, FolderPlus, Folder, Upload, Trash2,
+  BookOpen, Zap, Paperclip, ScanLine, ArrowRightLeft, GripVertical
 } from 'lucide-react';
 import type { LucideProps } from 'lucide-react';
 
 
 const ICONS = {
   LayoutDashboard, Users, Briefcase, Contact, CheckSquare, MoreVertical,
-  PlusCircle, Search, Bell, Sun, Moon, ChevronDown, ChevronUp, X, Filter, 
+  PlusCircle, Search, Bell, Sun, Moon, ChevronDown, ChevronUp, ChevronRight, X, Filter, 
   Calendar, ArrowRight, Bot, Send, Loader, Menu, Banknote, Building,
   ArrowLeft, Mail, Phone, Home, TrendingUp, TrendingDown, RefreshCw,
   FileText, Download, Pencil, Edit, FilePlus2, Sparkles, Info, Wifi, Frame,
@@ -26,7 +27,8 @@ const ICONS = {
   Percent, UserCog, ShieldAlert, ClipboardCheck, FileSignature, PhoneCall, Mic, Square,
   Paintbrush, Database, UserPlus, Settings, Gem, CreditCard, Code2, Headset, 
   DatabaseBackup, AppWindow, KeyRound, HelpCircle, Command, BarChart3, Play,
-  GitFork, Star, Building2, DollarSign, List, Plus, Share2, FolderPlus, Folder, Upload, Trash2
+  GitFork, Star, Building2, DollarSign, CircleDollarSign, List, Plus, Share2, FolderPlus, Folder, Upload, Trash2,
+  BookOpen, Zap, Paperclip, ScanLine, ArrowRightLeft, GripVertical
 } as const;
 
 export type IconName = keyof typeof ICONS;

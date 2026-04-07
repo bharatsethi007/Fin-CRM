@@ -1,4 +1,4 @@
-import type { Firm, Advisor, Client, Lead, Application, Task, TaskComment, Document, Note, AuditTrailEntry, CallTranscript, AIRecommendationResponse, OneRoofPropertyDetails, BankRates } from '../../types';
+import type { Firm, Advisor, Client, Lead, LeadActivityEntry, Application, Task, TaskComment, Document, Note, AuditTrailEntry, CallTranscript, AIRecommendationResponse, OneRoofPropertyDetails, BankRates } from '../../types';
 import { LeadStatus, ApplicationStatus, ClientPortalStatus } from '../../types';
 
 export const MOCK_FIRMS: Firm[] = [
@@ -37,11 +37,82 @@ export let MOCK_CLIENTS: Client[] = [
   { id: 'c5', firmId: 'firm_1', name: 'Kate Allen', email: 'kate.a@example.co.nz', phone: '021 333 4444', address: '303 Beach Road, Tauranga', dateAdded: '2024-01-15', advisorId: 'adv_2', avatarUrl: 'https://i.pravatar.cc/150?u=c5', financials: { income: 80000, expenses: 45000, assets: 150000, liabilities: 40000, otherBorrowings: 10000 }, creditScore: { score: 620, provider: 'Centrix', lastUpdated: '2024-07-10' }, portal: { status: ClientPortalStatus.NotSetup } },
 ];
 
+const emptyLeadActivity = (created: string): LeadActivityEntry[] => [
+  { at: created, type: 'created', message: 'Lead created' },
+];
+
 export const MOCK_LEADS: Lead[] = [
-    { id: 'l1', firmId: 'firm_1', name: 'Chloe Davis', email: 'chloe.d@example.com', phone: '027 111 2222', source: 'Website', status: LeadStatus.New, estimatedLoanAmount: 550000, dateAdded: '2024-07-28', avatarUrl: 'https://i.pravatar.cc/150?u=l1' },
-    { id: 'l2', firmId: 'firm_1', name: 'David Miller', email: 'david.m@example.com', phone: '021 333 4444', source: 'Referral', status: LeadStatus.New, estimatedLoanAmount: 800000, dateAdded: '2024-07-27', avatarUrl: 'https://i.pravatar.cc/150?u=l2' },
-    { id: 'l3', firmId: 'firm_2', name: 'Eva Green', email: 'eva.g@example.com', phone: '022 555 6666', source: 'Facebook', status: LeadStatus.Contacted, estimatedLoanAmount: 450000, dateAdded: '2024-07-26', avatarUrl: 'https://i.pravatar.cc/150?u=l3' },
-    { id: 'l4', firmId: 'firm_2', name: 'Frank Harris', email: 'frank.h@example.com', phone: '021 777 8888', source: 'Website', status: LeadStatus.MeetingScheduled, estimatedLoanAmount: 1200000, dateAdded: '2024-07-25', avatarUrl: 'https://i.pravatar.cc/150?u=l4' },
+    {
+        id: 'l1',
+        firmId: 'firm_1',
+        name: 'Chloe Davis',
+        email: 'chloe.d@example.com',
+        phone: '027 111 2222',
+        source: 'Website',
+        status: LeadStatus.New,
+        estimatedLoanAmount: 550000,
+        dateAdded: '2024-07-28',
+        createdAtIso: '2024-07-28T10:00:00.000Z',
+        avatarUrl: 'https://i.pravatar.cc/150?u=l1',
+        assignedAdvisorId: 'adv_2',
+        leadNotes: [],
+        leadActivity: emptyLeadActivity('2024-07-28T10:00:00.000Z'),
+        nextFollowUpDate: '2024-07-29',
+    },
+    {
+        id: 'l2',
+        firmId: 'firm_1',
+        name: 'David Miller',
+        email: 'david.m@example.com',
+        phone: '021 333 4444',
+        source: 'Referral',
+        status: LeadStatus.New,
+        estimatedLoanAmount: 800000,
+        dateAdded: '2024-07-27',
+        createdAtIso: '2024-07-27T09:00:00.000Z',
+        avatarUrl: 'https://i.pravatar.cc/150?u=l2',
+        assignedAdvisorId: 'adv_1',
+        leadNotes: [],
+        leadActivity: emptyLeadActivity('2024-07-27T09:00:00.000Z'),
+    },
+    {
+        id: 'l3',
+        firmId: 'firm_2',
+        name: 'Eva Green',
+        email: 'eva.g@example.com',
+        phone: '022 555 6666',
+        source: 'Trade Me',
+        status: LeadStatus.Contacted,
+        estimatedLoanAmount: 450000,
+        dateAdded: '2024-07-26',
+        createdAtIso: '2024-07-26T12:00:00.000Z',
+        avatarUrl: 'https://i.pravatar.cc/150?u=l3',
+        leadNotes: [],
+        leadActivity: [
+            ...emptyLeadActivity('2024-07-26T12:00:00.000Z'),
+            { at: '2024-07-27T08:00:00.000Z', type: 'status_change', message: 'Moved to Contacted' },
+        ],
+    },
+    {
+        id: 'l4',
+        firmId: 'firm_2',
+        name: 'Frank Harris',
+        email: 'frank.h@example.com',
+        phone: '021 777 8888',
+        source: 'Website',
+        status: LeadStatus.MeetingScheduled,
+        estimatedLoanAmount: 1200000,
+        dateAdded: '2024-07-25',
+        createdAtIso: '2024-07-25T11:00:00.000Z',
+        avatarUrl: 'https://i.pravatar.cc/150?u=l4',
+        assignedAdvisorId: 'adv_3',
+        leadNotes: [],
+        leadActivity: [
+            ...emptyLeadActivity('2024-07-25T11:00:00.000Z'),
+            { at: '2024-07-26T09:00:00.000Z', type: 'status_change', message: 'Moved to Meeting Scheduled' },
+        ],
+        nextFollowUpDate: '2024-08-01',
+    },
 ];
 
 

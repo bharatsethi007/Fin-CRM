@@ -1,7 +1,49 @@
-import type { Client, Lead } from '../../types';
+import type { Client, Lead, LeadActivityEntry, LeadNote } from '../../types';
+import { logger } from '../../utils/logger';
 import { ClientPortalStatus, LeadStatus } from '../../types';
 import { supabase } from '../supabaseClient';
 import { authService } from './authService';
+
+function parseLeadStatusFromRow(raw: string | null | undefined): LeadStatus {
+    const v = (raw || '').trim();
+    const allowed = Object.values(LeadStatus) as string[];
+    if (allowed.includes(v)) return v as LeadStatus;
+    return LeadStatus.New;
+}
+
+function parseLeadNotes(raw: unknown): LeadNote[] {
+    if (!Array.isArray(raw)) return [];
+    return raw
+        .map((x) => {
+            const o = x as Record<string, unknown>;
+            const id = String(o.id || '');
+            const text = String(o.text || '');
+            const created_at = String(o.created_at || '');
+            if (!id || !text || !created_at) return null;
+            return {
+                id,
+                text,
+                created_at,
+                author_name: o.author_name != null ? String(o.author_name) : undefined,
+            } as LeadNote;
+        })
+        .filter(Boolean) as LeadNote[];
+}
+
+function parseLeadActivity(raw: unknown): LeadActivityEntry[] {
+    if (!Array.isArray(raw)) return [];
+    return raw
+        .map((x) => {
+            const o = x as Record<string, unknown>;
+            const at = String(o.at || '');
+            const type = o.type as LeadActivityEntry['type'];
+            const message = String(o.message || '');
+            if (!at || !message) return null;
+            if (type !== 'created' && type !== 'status_change' && type !== 'note') return null;
+            return { at, type, message };
+        })
+        .filter(Boolean) as LeadActivityEntry[];
+}
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -85,12 +127,12 @@ export const clientService = {
                 .order('created_at', { ascending: false });
 
             if (error) {
-                console.error('Error fetching clients:', error);
+                logger.error('Error fetching clients:', error);
                 return [];
             }
             return (data || []).map(mapRowToClient);
         } catch (err) {
-            console.error('Failed to load clients:', err);
+            logger.error('Failed to load clients:', err);
             return [];
         }
     },
@@ -100,14 +142,15 @@ export const clientService = {
         if (!currentFirm || !UUID_REGEX.test(currentFirm.id)) return [];
 
         try {
+            // Use * so older DBs without lead_notes / lead_activity / next_follow_up_date still work.
             const { data, error } = await supabase
                 .from('clients')
-                .select('id, firm_id, first_name, last_name, email, phone, lead_source, created_at, photo_url')
+                .select('*')
                 .eq('firm_id', currentFirm.id)
                 .order('created_at', { ascending: false });
 
             if (error) {
-                console.error('Error fetching leads:', error);
+                logger.error('Error fetching leads:', error);
                 return [];
             }
 
@@ -118,15 +161,25 @@ export const clientService = {
                 email: row.email,
                 phone: row.phone || '',
                 source: row.lead_source || 'Unknown',
-                status: LeadStatus.New,
-                estimatedLoanAmount: 0,
+                status: parseLeadStatusFromRow(row.lead_status),
+                estimatedLoanAmount: Number(row.estimated_loan_amount) || 0,
                 dateAdded: row.created_at
                     ? new Date(row.created_at).toLocaleDateString('en-NZ')
                     : '',
+                createdAtIso: row.created_at
+                    ? new Date(row.created_at).toISOString()
+                    : undefined,
                 avatarUrl: row.photo_url || `https://i.pravatar.cc/150?u=${row.id}`,
+                lostReason: row.lead_lost_reason || undefined,
+                assignedAdvisorId: row.assigned_to || undefined,
+                leadNotes: parseLeadNotes(row.lead_notes),
+                leadActivity: parseLeadActivity(row.lead_activity),
+                nextFollowUpDate: row.next_follow_up_date
+                    ? String(row.next_follow_up_date).slice(0, 10)
+                    : undefined,
             }));
         } catch (err) {
-            console.error('Failed to load leads:', err);
+            logger.error('Failed to load leads:', err);
             return [];
         }
     },
@@ -142,7 +195,7 @@ export const clientService = {
             if (error || !data) return null;
             return mapRowToClient(data);
         } catch (err) {
-            console.error('Failed to load client:', err);
+            logger.error('Failed to load client:', err);
             return null;
         }
     },
@@ -208,7 +261,7 @@ export const clientService = {
             .single();
 
         if (error) {
-            console.error('Error creating client:', error);
+            logger.error('Error creating client:', error);
             throw new Error(error.message);
         }
 
@@ -230,6 +283,12 @@ export const clientService = {
             throw new Error('No valid firm session. Please log in again.');
         }
 
+        const createdAt = new Date().toISOString();
+        const initialActivity: LeadActivityEntry[] = [
+            { at: createdAt, type: 'created', message: 'Lead created' },
+        ];
+
+        // Omit lead_notes / lead_activity until migration 20260401_clients_lead_notes_activity.sql is applied.
         const { data, error } = await supabase
             .from('clients')
             .insert({
@@ -241,14 +300,19 @@ export const clientService = {
                 lead_source: input.leadSource || null,
                 assigned_to: currentUser?.id || null,
                 portal_status: 'Not Setup',
+                lead_status: LeadStatus.New,
+                estimated_loan_amount: input.estimatedLoanAmount ?? 0,
             })
-            .select('id, firm_id, first_name, last_name, email, phone, lead_source, created_at, photo_url')
+            .select()
             .single();
 
         if (error) {
-            console.error('Error creating lead:', error);
+            logger.error('Error creating lead:', error);
             throw new Error(error.message);
         }
+
+        const parsedNotes = parseLeadNotes(data.lead_notes);
+        const parsedActivity = parseLeadActivity(data.lead_activity);
 
         return {
             id: data.id,
@@ -257,10 +321,17 @@ export const clientService = {
             email: data.email,
             phone: data.phone || '',
             source: data.lead_source || 'Unknown',
-            status: LeadStatus.New,
-            estimatedLoanAmount: input.estimatedLoanAmount || 0,
+            status: parseLeadStatusFromRow(data.lead_status),
+            estimatedLoanAmount: Number(data.estimated_loan_amount) || 0,
             dateAdded: new Date(data.created_at).toLocaleDateString('en-NZ'),
+            createdAtIso: new Date(data.created_at).toISOString(),
             avatarUrl: data.photo_url || `https://i.pravatar.cc/150?u=${data.id}`,
+            assignedAdvisorId: data.assigned_to || undefined,
+            leadNotes: parsedNotes,
+            leadActivity: parsedActivity.length > 0 ? parsedActivity : initialActivity,
+            nextFollowUpDate: data.next_follow_up_date
+                ? String(data.next_follow_up_date).slice(0, 10)
+                : undefined,
         };
     },
 
@@ -275,7 +346,7 @@ export const clientService = {
         phone: string;
         leadSource: string;
         notes: string;
-        assignedTo: string;
+        assignedTo: string | null;
         employmentStatus: string;
         employerName: string;
         annualIncome: number;
@@ -286,6 +357,12 @@ export const clientService = {
         city: string;
         postalCode: string;
         dateOfBirth: string;
+        leadStatus: LeadStatus;
+        leadLostReason: string | null;
+        estimatedLoanAmount: number;
+        leadNotes: LeadNote[];
+        leadActivity: LeadActivityEntry[];
+        nextFollowUpDate: string | null;
     }>): Promise<Client> => {
         const dbUpdates: Record<string, any> = {};
         if (updates.firstName !== undefined) dbUpdates.first_name = updates.firstName;
@@ -294,7 +371,9 @@ export const clientService = {
         if (updates.phone !== undefined) dbUpdates.phone = updates.phone;
         if (updates.leadSource !== undefined) dbUpdates.lead_source = updates.leadSource;
         if (updates.notes !== undefined) dbUpdates.notes = updates.notes;
-        if (updates.assignedTo !== undefined) dbUpdates.assigned_to = updates.assignedTo;
+        if (updates.assignedTo !== undefined) {
+            dbUpdates.assigned_to = updates.assignedTo === '' ? null : updates.assignedTo;
+        }
         if (updates.employmentStatus !== undefined) dbUpdates.employment_status = updates.employmentStatus;
         if (updates.employerName !== undefined) dbUpdates.employer_name = updates.employerName;
         if (updates.annualIncome !== undefined) dbUpdates.annual_income = updates.annualIncome;
@@ -305,6 +384,27 @@ export const clientService = {
         if (updates.city !== undefined) dbUpdates.city = updates.city;
         if (updates.postalCode !== undefined) dbUpdates.postal_code = updates.postalCode;
         if (updates.dateOfBirth !== undefined) dbUpdates.date_of_birth = updates.dateOfBirth;
+        if (updates.leadStatus !== undefined) {
+            dbUpdates.lead_status = updates.leadStatus;
+            if (updates.leadStatus !== LeadStatus.ClosedLost) {
+                dbUpdates.lead_lost_reason = null;
+            }
+        }
+        if (updates.leadLostReason !== undefined) {
+            dbUpdates.lead_lost_reason = updates.leadLostReason || null;
+        }
+        if (updates.estimatedLoanAmount !== undefined) {
+            dbUpdates.estimated_loan_amount = updates.estimatedLoanAmount;
+        }
+        if (updates.leadNotes !== undefined) {
+            dbUpdates.lead_notes = updates.leadNotes;
+        }
+        if (updates.leadActivity !== undefined) {
+            dbUpdates.lead_activity = updates.leadActivity;
+        }
+        if (updates.nextFollowUpDate !== undefined) {
+            dbUpdates.next_follow_up_date = updates.nextFollowUpDate || null;
+        }
 
         const { data, error } = await supabase
             .from('clients')
@@ -314,7 +414,7 @@ export const clientService = {
             .single();
 
         if (error) {
-            console.error('Error updating client:', error);
+            logger.error('Error updating client:', error);
             throw new Error(error.message);
         }
 
@@ -332,7 +432,7 @@ export const clientService = {
             .eq('id', id);
 
         if (error) {
-            console.error('Error deleting client:', error);
+            logger.error('Error deleting client:', error);
             throw new Error(error.message);
         }
     },

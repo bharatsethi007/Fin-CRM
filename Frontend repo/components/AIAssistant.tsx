@@ -1,7 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { logger } from '../utils/logger';
 import { Button } from './common/Button';
 import { Icon } from './common/Icon';
 import { geminiService } from '../services/geminiService';
+import { FlowIntelligenceLogo } from './common/FlowIntelligenceLogo';
 
 interface Message {
   sender: 'user' | 'ai';
@@ -11,7 +13,10 @@ interface Message {
 const AIAssistant: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
-    { sender: 'ai', text: "Kia ora! I'm your AI assistant. How can I help you today? Try asking 'Summarize my new leads'." }
+    {
+      sender: 'ai',
+      text: "Kia ora! I'm Flow Intelligence, your AI co-pilot. Ask me things like 'Summarise clients missing disclosure' or 'What should I focus on today?'",
+    },
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -40,7 +45,7 @@ const AIAssistant: React.FC = () => {
       const aiMessage: Message = { sender: 'ai', text: aiResponse };
       setMessages(prev => [...prev, aiMessage]);
     } catch (error) {
-      console.error('Error fetching AI response:', error);
+      logger.error('Error fetching AI response:', error);
       const errorMessage: Message = { sender: 'ai', text: "Sorry, I couldn't fetch a response. Please try again." };
       setMessages(prev => [...prev, errorMessage]);
     } finally {
@@ -53,9 +58,9 @@ const AIAssistant: React.FC = () => {
       {/* Chat Window */}
       <div className={`fixed bottom-24 right-4 sm:right-8 w-[calc(100%-2rem)] sm:w-96 h-[32rem] bg-white dark:bg-gray-800 rounded-lg shadow-2xl flex flex-col z-50 border border-gray-200 dark:border-gray-700 transition-all duration-300 ease-in-out ${isOpen ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 pointer-events-none'}`}>
           <div className="flex items-center justify-between p-3 border-b border-gray-200 dark:border-gray-700">
-            <div className="flex items-center">
-              <Icon name="Sparkles" className="h-6 w-6 text-primary-500" />
-              <h3 className="text-lg font-semibold ml-2">AI Assistant</h3>
+            <div className="flex items-center gap-2">
+              <FlowIntelligenceLogo size="sm" showWordmark={false} />
+              <h3 className="text-lg font-semibold">Flow Intelligence</h3>
             </div>
             <button
                 onClick={() => setIsOpen(false)}
@@ -105,9 +110,13 @@ const AIAssistant: React.FC = () => {
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="fixed bottom-6 right-4 sm:right-8 h-16 w-16 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 opacity-90 backdrop-blur-lg border border-white/30 text-white flex items-center justify-center shadow-lg hover:scale-110 focus:outline-none focus:ring-4 focus:ring-primary-300 transition-transform duration-200 z-50"
-        aria-label="Toggle AI Assistant"
+        aria-label="Toggle Flow Intelligence"
       >
-        <Icon name={isOpen ? 'X' : 'Sparkles'} className="h-8 w-8 transition-transform duration-300" />
+        {isOpen ? (
+          <Icon name="X" className="h-8 w-8 transition-transform duration-300" />
+        ) : (
+          <FlowIntelligenceLogo size="sm" showWordmark={false} />
+        )}
       </button>
     </>
   );

@@ -1,0 +1,10 @@
+---
+alwaysApply: true
+---
+# Code Style Rules
+- New components must be under 300 lines. If a component grows beyond 300 lines, split it.
+- Extract reusable UI elements (cards, modals, badges) into components/common/
+- No inline styles for new code — use Tailwind classes only
+- Every new function must have a one-line JSDoc comment
+- Keep imports organized: React first, then external libs, then internal modules
+- Use the existing logger utility (utils/logger.ts) instead of console.log

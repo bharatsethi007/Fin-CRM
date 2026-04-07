@@ -66,6 +66,19 @@ export interface Client {
   };
 }
 
+export interface LeadNote {
+  id: string;
+  text: string;
+  created_at: string;
+  author_name?: string;
+}
+
+export interface LeadActivityEntry {
+  at: string;
+  type: 'created' | 'status_change' | 'note';
+  message: string;
+}
+
 export interface Lead {
   id: string;
   firmId: string;
@@ -76,9 +89,17 @@ export interface Lead {
   status: LeadStatus;
   estimatedLoanAmount: number;
   dateAdded: string;
+  /** ISO created_at for timeline copy */
+  createdAtIso?: string;
   clientId?: string;
   avatarUrl: string;
   conversionProbability?: number;
+  /** Set when status is Closed - Lost */
+  lostReason?: string;
+  assignedAdvisorId?: string;
+  leadNotes: LeadNote[];
+  leadActivity: LeadActivityEntry[];
+  nextFollowUpDate?: string;
 }
 
 export interface Application {
@@ -156,6 +177,8 @@ export interface Document {
   id: string;
   firmId: string;
   clientId: string;
+  /** When set, parses apply to this application; otherwise UI may use a default from the client profile. */
+  applicationId?: string;
   name: string;
   category: DocumentCategory;
   folderId?: string;
@@ -164,6 +187,8 @@ export interface Document {
   url: string;
   expiryDate?: string;
   status?: 'Valid' | 'Expiring Soon' | 'Expired';
+  parseStatus?: string;
+  detectedType?: string;
 }
 
 export interface DocumentFolder {

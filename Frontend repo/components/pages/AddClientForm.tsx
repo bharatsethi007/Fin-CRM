@@ -1,36 +1,77 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { crmService } from '../../services/api';
 import type { Client } from '../../types';
 import { Button } from '../common/Button';
 
+export type AddClientFormInitialValues = Partial<{
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  address: string;
+  city: string;
+  postalCode: string;
+  dateOfBirth: string;
+  leadSource: string;
+  employmentStatus: string;
+  employerName: string;
+  income: string;
+  expenses: string;
+  assets: string;
+  liabilities: string;
+  otherBorrowings: string;
+  notes: string;
+}>;
+
 interface Props {
   onBack: () => void;
   onSuccess: (client: Client) => void;
+  initialValues?: AddClientFormInitialValues;
+  /** When true, lighter chrome for embedding inside Add Client hub */
+  embedded?: boolean;
+  submitLabel?: string;
 }
 
 const toNum = (v: string) => (v === '' ? 0 : Number(v));
 
-const AddClientForm: React.FC<Props> = ({ onBack, onSuccess }) => {
+const emptyForm = {
+  firstName: '',
+  lastName: '',
+  email: '',
+  phone: '',
+  address: '',
+  city: '',
+  postalCode: '',
+  dateOfBirth: '',
+  leadSource: '',
+  employmentStatus: '',
+  employerName: '',
+  income: '',
+  expenses: '',
+  assets: '',
+  liabilities: '',
+  otherBorrowings: '',
+  notes: '',
+};
+
+const AddClientForm: React.FC<Props> = ({
+  onBack,
+  onSuccess,
+  initialValues,
+  embedded,
+  submitLabel,
+}) => {
   const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    phone: '',
-    address: '',
-    city: '',
-    postalCode: '',
-    dateOfBirth: '',
-    leadSource: '',
-    employmentStatus: '',
-    employerName: '',
-    income: '',
-    expenses: '',
-    assets: '',
-    liabilities: '',
-    otherBorrowings: '',
-    notes: '',
-  });
+  const [formData, setFormData] = useState(() => ({
+    ...emptyForm,
+    ...initialValues,
+  }));
+
+  useEffect(() => {
+    if (initialValues && Object.keys(initialValues).length > 0) {
+      setFormData((prev) => ({ ...prev, ...initialValues }));
+    }
+  }, [initialValues]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,8 +106,15 @@ const AddClientForm: React.FC<Props> = ({ onBack, onSuccess }) => {
   };
 
   return (
-    <div className="bg-white dark:bg-gray-800 shadow-md rounded-lg p-6">
-      <h2 className="text-xl font-bold mb-4">Add New Client</h2>
+    <div
+      className={
+        embedded
+          ? 'rounded-lg p-4 border dark:border-gray-600'
+          : 'bg-white dark:bg-gray-800 shadow-md rounded-lg p-6'
+      }
+      style={embedded ? { borderColor: 'var(--border-color)', background: 'var(--bg-card)' } : undefined}
+    >
+      <h2 className={`font-bold mb-4 ${embedded ? 'text-lg' : 'text-xl'}`}>Manual entry</h2>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <input
@@ -247,9 +295,11 @@ const AddClientForm: React.FC<Props> = ({ onBack, onSuccess }) => {
 
         <div className="flex gap-2 mt-6">
           <Button type="submit" disabled={loading}>
-            {loading ? 'Saving...' : 'Save Client'}
+            {loading ? 'Saving...' : submitLabel || 'Save Client'}
           </Button>
-          <Button variant="ghost" onClick={onBack}>Cancel</Button>
+          <Button variant="ghost" onClick={onBack}>
+            {embedded ? 'Back' : 'Cancel'}
+          </Button>
         </div>
       </form>
     </div>

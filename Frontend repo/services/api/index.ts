@@ -91,5 +91,19 @@ export const crmService = {
 
 // Named exports for helpers imported directly (not via crmService)
 export { authService, clientService, applicationService, taskService, documentService, noteService, toolsService };
+export type {
+  Applicant,
+  Asset,
+  AssetOwnership,
+  Company,
+  CreateApplicationFirmPayload,
+  CreateApplicationInput,
+  Employment,
+  Expense,
+  Income,
+  Liability,
+  UpdateApplicationInput,
+} from './applicationService';
+export type { LoginSuccess } from './authService';
 export { toSupabaseFirmId } from './clientService';
 export const getCurrentFirm = () => authService.getCurrentFirm();

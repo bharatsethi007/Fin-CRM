@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { logger } from '../../utils/logger';
 import type { Task, TaskComment, Advisor } from '../../types';
 import { crmService } from '../../services/api';
 import { Modal } from './Modal';
@@ -45,7 +46,7 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({ task, onClose,
         setComments(fetchedComments);
         setAdvisors(fetchedAdvisors);
     } catch (error) {
-        console.error("Failed to fetch task data:", error);
+        logger.error("Failed to fetch task data:", error);
     } finally {
         setIsLoadingData(false);
     }
@@ -72,7 +73,7 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({ task, onClose,
         });
         onUpdate();
     } catch (error: unknown) {
-        console.error("Failed to save task:", error);
+        logger.error("Failed to save task:", error);
         const message = error instanceof Error ? error.message : 'Could not save task details.';
         alert(message);
         setIsSaving(false);
@@ -94,7 +95,7 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({ task, onClose,
         setNewComment('');
         await fetchTaskData(); // Re-fetch comments
     } catch (error) {
-        console.error("Failed to add comment:", error);
+        logger.error("Failed to add comment:", error);
         alert('Could not add comment.');
     } finally {
         setIsPostingComment(false);

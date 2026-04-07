@@ -1,43 +1,68 @@
-
-import React, { useState, useEffect, useMemo } from 'react';
+import { useAuth } from '../../src/contexts/AuthContext';
+import { logger } from '../../utils/logger';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  AreaChart,
-  Area,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-} from 'recharts';
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import { SortableContext, rectSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import { crmService } from '../../services/api';
-import { geminiService } from '../../services/geminiService';
-import type { SanitizedDashboardData } from '../../services/geminiService';
+import { supabase } from '../../services/supabaseClient';
 import { Icon } from '../common/Icon';
-import type { Application, Advisor, Task, Client, Note, Lead } from '../../types';
+import { useToast } from '../../hooks/useToast';
+import { SortableDashboardWidget } from '../dashboard/SortableDashboardWidget';
+import { renderDashboardWidget, type DashboardWidgetParams } from '../dashboard/dashboardWidgetRender';
+import {
+  type WidgetId,
+  type WidgetLayoutItem,
+  WIDGET_LABELS,
+  WIDGET_CUSTOMISE_ORDER,
+  defaultWidgetLayout,
+  mergeWidgetLayout,
+  normalizeWidgetOrder,
+} from '../../constants/dashboardWidgets';
+import type { Application, Advisor, Task, Client, Note } from '../../types';
 import { ApplicationStatus } from '../../types';
+import { useTheme } from '../../src/contexts/ThemeContext';
+import { useAutoRefresh } from '../hooks/useAutoRefresh';
 
-// Pastel palette: background (pastel) + text/border (darker)
-const PASTEL = {
-  blue: { bg: '#dbeafe', text: '#2563eb' },
-  green: { bg: '#dcfce7', text: '#16a34a' },
-  orange: { bg: '#ffedd5', text: '#ea580c' },
-  purple: { bg: '#f3e8ff', text: '#9333ea' },
-  pink: { bg: '#fce7f3', text: '#db2777' },
-  yellow: { bg: '#fef9c3', text: '#ca8a04' },
+/** Design tokens — src/index.css */
+const DS = {
+  bg: 'var(--bg-primary)',
+  card: 'var(--bg-card)',
+  shadow: 'var(--shadow-card)',
+  border: '1px solid var(--border-color)',
+  accent: 'var(--accent)',
+  accent2: 'var(--accent-end)',
+  success: 'var(--success)',
+  warning: 'var(--warning)',
+  danger: 'var(--danger)',
+  text: 'var(--text-primary)',
+  textMuted: 'var(--text-secondary)',
 } as const;
 
-const STAGE_PASTEL: Record<string, { bg: string; text: string; border: string }> = {
-  draft: { bg: PASTEL.blue.bg, text: PASTEL.blue.text, border: PASTEL.blue.text },
-  submitted: { bg: PASTEL.yellow.bg, text: PASTEL.yellow.text, border: PASTEL.yellow.text },
-  conditional: { bg: PASTEL.orange.bg, text: PASTEL.orange.text, border: PASTEL.orange.text },
-  unconditional: { bg: PASTEL.green.bg, text: PASTEL.green.text, border: PASTEL.green.text },
-  settled: { bg: PASTEL.purple.bg, text: PASTEL.purple.text, border: PASTEL.purple.text },
-  declined: { bg: PASTEL.pink.bg, text: PASTEL.pink.text, border: PASTEL.pink.text },
+const CARD_STYLE: React.CSSProperties = {
+  background: DS.card,
+  borderRadius: 16,
+  padding: '20px 24px',
+  boxShadow: DS.shadow,
+  border: DS.border,
 };
 
-const PASTEL_CHART_COLORS = [PASTEL.blue.text, PASTEL.yellow.text, PASTEL.orange.text, PASTEL.green.text, PASTEL.purple.text];
+const FIXED_RATE_TYPES = ['fixed', 'fixed_6m', 'fixed_1yr', 'fixed_2yr', 'fixed_3yr', 'fixed_5yr'] as const;
+
+const STAGE_STYLES: Record<string, { bg: string; text: string }> = {
+  draft: { bg: '#F1F5F9', text: '#475569' },
+  submitted: { bg: '#DBEAFE', text: '#2563EB' },
+  conditional: { bg: '#D1FAE5', text: '#059669' },
+  unconditional: { bg: '#D1FAE5', text: '#059669' },
+  settled: { bg: '#EDE9FE', text: '#7C3AED' },
+  declined: { bg: '#FEE2E2', text: '#DC2626' },
+};
 
 interface DashboardProps {
   setCurrentView: (view: string) => void;
@@ -56,23 +81,6 @@ function formatCurrency(value: number): string {
   return `$${value.toLocaleString()}`;
 }
 
-const timeAgo = (dateString: string): string => {
-  const date = new Date(dateString);
-  const now = new Date();
-  const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
-  let interval = seconds / 31536000;
-  if (interval > 1) return Math.floor(interval) + ' years ago';
-  interval = seconds / 2592000;
-  if (interval > 1) return Math.floor(interval) + ' months ago';
-  interval = seconds / 86400;
-  if (interval > 1) return Math.floor(interval) + ' days ago';
-  interval = seconds / 3600;
-  if (interval > 1) return Math.floor(interval) + ' hours ago';
-  interval = seconds / 60;
-  if (interval > 1) return Math.floor(interval) + ' minutes ago';
-  return Math.floor(seconds) + ' seconds ago';
-};
-
 function workflowKey(a: Application): string {
   const s = (a.status as string) || '';
   const k = s.toLowerCase().replace(/\s+/g, '_');
@@ -85,14 +93,12 @@ function workflowKey(a: Application): string {
   return k;
 }
 
-const PIPELINE_BOARD_STAGES = ['draft', 'submitted', 'conditional', 'unconditional', 'settled'] as const;
 const ALL_STAGES = ['draft', 'submitted', 'conditional', 'unconditional', 'settled', 'declined'] as const;
-const AI_INSIGHTS_CACHE_KEY = 'dashboard_ai_insights';
 
-function getMonthKeysLast6(): { key: string; label: string }[] {
+function getMonthKeys(n: number): { key: string; label: string }[] {
   const out: { key: string; label: string }[] = [];
   const now = new Date();
-  for (let i = 5; i >= 0; i--) {
+  for (let i = n - 1; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     out.push({
       key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
@@ -100,6 +106,20 @@ function getMonthKeysLast6(): { key: string; label: string }[] {
     });
   }
   return out;
+}
+
+function bestRateForType(
+  rows: { lender_name: string | null; rate_type: string | null; rate_percent: number | null }[],
+  rateType: string,
+): { rate_percent: number; lender_name: string | null } | null {
+  let pick: { lender_name: string | null; rate_percent: number } | null = null;
+  for (const r of rows) {
+    if (r.rate_type !== rateType || r.rate_percent == null) continue;
+    if (!pick || r.rate_percent < pick.rate_percent) {
+      pick = { lender_name: r.lender_name, rate_percent: r.rate_percent };
+    }
+  }
+  return pick;
 }
 
 function lastMonthKey(now: Date): string {
@@ -113,54 +133,281 @@ function pctChange(current: number, previous: number): number | null {
   return Math.round(((current - previous) / previous) * 100);
 }
 
+function getTimeOfDay(): string {
+  const h = new Date().getHours();
+  if (h < 12) return 'morning';
+  if (h < 17) return 'afternoon';
+  return 'evening';
+}
+
+const FI_PREFILL_KEY = 'fi_prefill_message';
+
+interface SuggestionChip {
+  label: string;
+  message: string;
+}
+
 const Dashboard: React.FC<DashboardProps> = ({
   setCurrentView,
   navigateToClient,
   navigateToApplication,
   advisor,
 }) => {
+  const { theme } = useTheme();
+  const { toast } = useToast();
+  const chartTextColor = theme === 'dark' ? '#94A3B8' : '#64748B';
+  const chartGridColor = theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+
   const [viewMode, setViewMode] = useState<'my' | 'firm'>('firm');
   const [allApplications, setAllApplications] = useState<Application[]>([]);
   const [allTasks, setAllTasks] = useState<Task[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [advisors, setAdvisors] = useState<Advisor[]>([]);
   const [recentNotes, setRecentNotes] = useState<Note[]>([]);
-  const [leads, setLeads] = useState<Lead[]>([]);
   const [activeAppsSearch, setActiveAppsSearch] = useState('');
   const [activeAppsStageFilter, setActiveAppsStageFilter] = useState<string>('all');
   const [activeAppsPage, setActiveAppsPage] = useState(1);
-  const [leadsTimeFilter, setLeadsTimeFilter] = useState<'this_week' | 'this_month'>('this_week');
-  const [aiInsights, setAiInsights] = useState<string>('');
-  const [aiInsightsLoading, setAiInsightsLoading] = useState(false);
   const [advisorPerfFilter, setAdvisorPerfFilter] = useState<'this_month' | 'ytd'>('this_month');
+  const [chartMonthCount, setChartMonthCount] = useState<6 | 12>(6);
+  const [marketRatesRows, setMarketRatesRows] = useState<
+    { lender_name: string | null; rate_type: string | null; rate_percent: number | null }[]
+  >([]);
+  const [commissionExpected, setCommissionExpected] = useState(0);
+  const [commissionReceived, setCommissionReceived] = useState(0);
+  const [clawbackRiskAmt, setClawbackRiskAmt] = useState(0);
+  const [commissionExpectedPrev, setCommissionExpectedPrev] = useState(0);
+  const [refixRows, setRefixRows] = useState<
+    { loan_amount: number | null; current_rate_expiry_date: string | null; lender_name: string | null; client_id: string | null }[]
+  >([]);
+  const [briefingRefreshKey, setBriefingRefreshKey] = useState(0);
+  const [widgetLayout, setWidgetLayout] = useState<WidgetLayoutItem[]>(() => defaultWidgetLayout());
+  const [showCustomise, setShowCustomise] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [suggestions, setSuggestions] = useState<SuggestionChip[]>([
+    { label: '📊 Pipeline', message: 'Give me a pipeline summary' },
+    { label: '💰 Commission', message: 'What is my commission this month?' },
+  ]);
+
+  const loadDashboardData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [apps, tasks, clientList, advisorList, notes] = await Promise.all([
+        crmService.getApplications(),
+        crmService.getTasks(),
+        crmService.getClients(),
+        crmService.getAdvisors(),
+        crmService.getNotes(),
+      ]);
+      setAllApplications(apps || []);
+      setAllTasks(tasks || []);
+      setClients(clientList || []);
+      setAdvisors(advisorList || []);
+      setRecentNotes((notes || []).slice(0, 5));
+
+      const firmId = advisor.firmId;
+      const today = new Date().toISOString().split('T')[0];
+      const in90 = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const msStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+      const prevMonth = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1);
+
+      const [ratesRes, commRes, refixRes] = await Promise.all([
+        supabase
+          .from('market_rates')
+          .select('lender_name, rate_type, rate_percent')
+          .eq('is_current', true)
+          .eq('owner_occupied', true)
+          .order('rate_percent', { ascending: true }),
+        supabase.from('commissions').select('*').eq('firm_id', firmId),
+        supabase
+          .from('settled_loans')
+          .select('loan_amount, current_rate_expiry_date, lender_name, client_id')
+          .eq('firm_id', firmId)
+          .eq('status', 'active')
+          .in('current_rate_type', [...FIXED_RATE_TYPES])
+          .gte('current_rate_expiry_date', today)
+          .lte('current_rate_expiry_date', in90),
+      ]);
+
+      setMarketRatesRows(ratesRes.data || []);
+
+      const commRows = commRes.data || [];
+      const expected = commRows
+        .filter((c: { status?: string }) => (c.status || '').toLowerCase() === 'expected')
+        .filter((c: { settlement_date?: string }) => {
+          if (!c.settlement_date) return false;
+          return new Date(c.settlement_date) >= msStart;
+        })
+        .reduce((s: number, c: { net_amount?: number }) => s + Number(c.net_amount), 0);
+      const received = commRows
+        .filter((c: { status?: string }) => (c.status || '').toLowerCase() === 'received')
+        .filter((c: { received_date?: string }) => {
+          if (!c.received_date) return false;
+          return new Date(c.received_date) >= msStart;
+        })
+        .reduce((s: number, c: { net_amount?: number }) => s + Number(c.net_amount), 0);
+      const claw = commRows
+        .filter((c: { clawback_risk_until?: string }) => c.clawback_risk_until && new Date(c.clawback_risk_until) > new Date())
+        .reduce((s: number, c: { gross_amount?: number }) => s + Number(c.gross_amount), 0);
+      const expectedPrev = commRows
+        .filter((c: { status?: string }) => (c.status || '').toLowerCase() === 'expected')
+        .filter((c: { settlement_date?: string }) => {
+          if (!c.settlement_date) return false;
+          const d = new Date(c.settlement_date);
+          return d.getMonth() === prevMonth.getMonth() && d.getFullYear() === prevMonth.getFullYear();
+        })
+        .reduce((s: number, c: { net_amount?: number }) => s + Number(c.net_amount), 0);
+
+      setCommissionExpected(expected);
+      setCommissionReceived(received);
+      setClawbackRiskAmt(claw);
+      setCommissionExpectedPrev(expectedPrev);
+      setRefixRows(refixRes.data || []);
+    } catch (err) {
+      logger.error('Dashboard load error:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [advisor.firmId]);
+
+  // useAutoRefresh(loadDashboardData, 30);
+
+  useEffect(() => {
+    void loadDashboardData();
+  }, [loadDashboardData]);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    Promise.all([
-      crmService.getApplications(),
-      crmService.getTasks(),
-      crmService.getClients(),
-      crmService.getAdvisors(),
-      crmService.getNotes(),
-      crmService.getLeads(),
-    ])
-      .then(([apps, tasks, clientList, advisorList, notes, leadsList]) => {
-        if (cancelled) return;
-        setAllApplications(apps || []);
-        setAllTasks(tasks || []);
-        setClients(clientList || []);
-        setAdvisors(advisorList || []);
-        setRecentNotes((notes || []).slice(0, 5));
-        setLeads(leadsList || []);
-      })
-      .catch((err) => console.error('Dashboard load error:', err))
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || cancelled) return;
+      const { data } = await supabase
+        .from('dashboard_preferences')
+        .select('widget_layout')
+        .eq('advisor_id', user.id)
+        .maybeSingle();
+      if (cancelled) return;
+      if (data?.widget_layout) {
+        setWidgetLayout(normalizeWidgetOrder(mergeWidgetLayout(data.widget_layout)));
+      } else {
+        setWidgetLayout(defaultWidgetLayout());
+      }
+    })();
     return () => { cancelled = true; };
-  }, []);
+  }, [advisor.id]);
+
+  const loadSuggestions = useCallback(async () => {
+    try {
+      const fid = advisor.firmId;
+      if (!fid) return;
+      const { data: alerts } = await supabase
+        .from('ai_insights')
+        .select('insight_type, priority')
+        .eq('firm_id', fid)
+        .eq('is_actioned', false)
+        .eq('is_dismissed', false)
+        .order('priority')
+        .limit(2);
+
+      if (alerts && alerts.length > 0) {
+        setSuggestions(
+          alerts.map((a) => {
+            switch (a.insight_type) {
+              case 'rate_opportunity':
+                return { label: '📈 Rate opportunities', message: 'Show me all rate opportunities' };
+              case 'refix_opportunity':
+                return { label: '🔄 Rate refixes', message: 'Which clients have rate refixes due?' };
+              case 'stale_application':
+                return { label: '⏸ Stale applications', message: 'Show me stale applications' };
+              default:
+                return { label: '⚠ Review alerts', message: 'Show me my open alerts' };
+            }
+          }),
+        );
+      }
+    } catch {
+      // keep default suggestions
+    }
+  }, [advisor.firmId]);
+
+  useEffect(() => {
+    void loadSuggestions();
+  }, [loadSuggestions]);
+
+  const persistWidgetLayout = useCallback(
+    async (layout: WidgetLayoutItem[]) => {
+      const normalized = normalizeWidgetOrder(layout);
+      setWidgetLayout(normalized);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      await supabase.from('dashboard_preferences').upsert(
+        {
+          advisor_id: user.id,
+          firm_id: advisor.firmId,
+          widget_layout: normalized,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'advisor_id' },
+      );
+    },
+    [advisor.firmId],
+  );
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const vis = widgetLayout.filter((w) => w.visible).sort((a, b) => a.order - b.order);
+      const oldIndex = vis.findIndex((w) => w.id === active.id);
+      const newIndex = vis.findIndex((w) => w.id === over.id);
+      if (oldIndex < 0 || newIndex < 0) return;
+      const reorderedVisible = arrayMove(vis, oldIndex, newIndex);
+      const invisible = widgetLayout.filter((w) => !w.visible).sort((a, b) => a.order - b.order);
+      const combined = [...reorderedVisible, ...invisible];
+      const next = combined.map((w, i) => ({ ...w, order: i + 1 }));
+      void persistWidgetLayout(next);
+    },
+    [widgetLayout, persistWidgetLayout],
+  );
+
+  const toggleWidgetVisible = useCallback(
+    (id: WidgetId, visible: boolean) => {
+      const next = widgetLayout.map((w) => (w.id === id ? { ...w, visible } : w));
+      void persistWidgetLayout(next);
+    },
+    [widgetLayout, persistWidgetLayout],
+  );
+
+  const resetWidgetLayoutToDefault = useCallback(async () => {
+    const defaults = defaultWidgetLayout();
+    setWidgetLayout(defaults);
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      await supabase.from('dashboard_preferences').upsert(
+        {
+          advisor_id: user.id,
+          firm_id: advisor.firmId,
+          widget_layout: defaults,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'advisor_id' },
+      );
+    }
+
+    setShowCustomise(false);
+    toast.success('Dashboard reset to default layout');
+  }, [advisor.firmId, toast]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 8 },
+    }),
+  );
+
+  const visibleWidgets = useMemo(
+    () => widgetLayout.filter((w) => w.visible).sort((a, b) => a.order - b.order),
+    [widgetLayout],
+  );
 
   const viewFilteredApplications = useMemo(() => {
     if (viewMode === 'my') return allApplications.filter((a) => a.advisorId === advisor.id);
@@ -328,22 +575,10 @@ const Dashboard: React.FC<DashboardProps> = ({
       .sort((x, y) => y.settledThisMonth - x.settledThisMonth);
   }, [advisors, advisor.firmId, viewFilteredApplications]);
 
-  const avgDealSize =
-    settledApplications.length > 0
-      ? settledApplications.reduce((s, a) => s + (a.loanAmount || 0), 0) / settledApplications.length
-      : 0;
+  const monthKeys = useMemo(() => getMonthKeys(chartMonthCount), [chartMonthCount]);
 
-  const pipelineByStage = useMemo(() => {
-    const byStage: Record<string, Application[]> = {};
-    PIPELINE_BOARD_STAGES.forEach((stage) => {
-      byStage[stage] = viewFilteredApplications.filter((a) => workflowKey(a) === stage);
-    });
-    return byStage;
-  }, [viewFilteredApplications]);
-
-  const monthKeys = useMemo(() => getMonthKeysLast6(), []);
-
-  const areaChartData = useMemo(() => {
+  /** Loan volume touched per month (pipeline activity) — used for KPI trend */
+  const pipelineVolumeByMonth = useMemo(() => {
     return monthKeys.map(({ key, label }) => {
       const sum = viewFilteredApplications
         .filter((a) => {
@@ -358,20 +593,87 @@ const Dashboard: React.FC<DashboardProps> = ({
     });
   }, [viewFilteredApplications, monthKeys]);
 
-  const monthlySettledData = useMemo(() => {
+  const appsOverTimeData = useMemo(() => {
     return monthKeys.map(({ key, label }) => {
-      const sum = settledApplications
-        .filter((a) => {
-          const lu = a.lastUpdated;
-          if (!lu) return false;
-          const d = new Date(lu);
-          const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-          return m === key;
-        })
-        .reduce((s, a) => s + (a.loanAmount || 0), 0);
-      return { month: label, value: sum };
+      const applications = viewFilteredApplications.filter((a) => {
+        const lu = a.lastUpdated;
+        if (!lu) return false;
+        const d = new Date(lu);
+        const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        return m === key;
+      }).length;
+      return { month: label, applications };
     });
+  }, [viewFilteredApplications, monthKeys]);
+
+  const pipelineKpiTrendPct = useMemo(() => {
+    if (pipelineVolumeByMonth.length < 2) return null;
+    const cur = pipelineVolumeByMonth[pipelineVolumeByMonth.length - 1]?.value ?? 0;
+    const prev = pipelineVolumeByMonth[pipelineVolumeByMonth.length - 2]?.value ?? 0;
+    return pctChange(cur, prev);
+  }, [pipelineVolumeByMonth]);
+
+  const settledKpiTrendPct = useMemo(() => {
+    if (monthKeys.length < 2) return null;
+    const curKey = monthKeys[monthKeys.length - 1]?.key;
+    const prevKey = monthKeys[monthKeys.length - 2]?.key;
+    if (!curKey || !prevKey) return null;
+    const cur = settledApplications
+      .filter((a) => {
+        const lu = a.lastUpdated;
+        if (!lu) return false;
+        const d = new Date(lu);
+        const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        return m === curKey;
+      })
+      .reduce((s, a) => s + (a.loanAmount || 0), 0);
+    const prev = settledApplications
+      .filter((a) => {
+        const lu = a.lastUpdated;
+        if (!lu) return false;
+        const d = new Date(lu);
+        const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        return m === prevKey;
+      })
+      .reduce((s, a) => s + (a.loanAmount || 0), 0);
+    return pctChange(cur, prev);
   }, [settledApplications, monthKeys]);
+
+  const commissionKpiTrendPct = useMemo(
+    () => pctChange(commissionExpected, commissionExpectedPrev),
+    [commissionExpected, commissionExpectedPrev],
+  );
+
+  const stagePills = useMemo(() => {
+    const apps = viewFilteredApplications;
+    const draft = apps.filter((a) => workflowKey(a) === 'draft').length;
+    const submitted = apps.filter((a) => workflowKey(a) === 'submitted').length;
+    const approved = apps.filter((a) => {
+      const w = workflowKey(a);
+      return w === 'conditional' || w === 'unconditional';
+    }).length;
+    return { draft, submitted, approved };
+  }, [viewFilteredApplications]);
+
+  const bestRatesDisplay = useMemo(() => {
+    const rows = marketRatesRows;
+    return {
+      fixed1: bestRateForType(rows, 'fixed_1yr'),
+      fixed2: bestRateForType(rows, 'fixed_2yr'),
+      floating: bestRateForType(rows, 'floating'),
+    };
+  }, [marketRatesRows]);
+
+  const refixUrgentCount = useMemo(() => {
+    const now = Date.now();
+    const d30 = 30 * 24 * 60 * 60 * 1000;
+    return refixRows.filter((r) => {
+      if (!r.current_rate_expiry_date) return false;
+      return new Date(r.current_rate_expiry_date).getTime() - now <= d30;
+    }).length;
+  }, [refixRows]);
+
+  const greetingAlertCount = useMemo(() => refixUrgentCount, [refixUrgentCount]);
 
   const clientNamesById = useMemo(() => {
     const map: Record<string, string> = {};
@@ -402,513 +704,417 @@ const Dashboard: React.FC<DashboardProps> = ({
   }, [activeApplicationsFiltered, activeAppsPage]);
   const activeAppsTotalPages = Math.max(1, Math.ceil(activeApplicationsFiltered.length / ACTIVE_APPS_PAGE_SIZE));
 
-  const pendingTasks = useMemo(() => {
-    return (allTasks || [])
-      .filter((t) => !t.isCompleted)
-      .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''))
-      .slice(0, 6);
-  }, [allTasks]);
-
-  const recentLeadsFiltered = useMemo(() => {
-    const now = new Date();
-    const isThisWeek = (d: Date) => {
-      const start = new Date(now); start.setDate(now.getDate() - now.getDay());
-      start.setHours(0,0,0,0);
-      const end = new Date(start); end.setDate(start.getDate() + 7);
-      return d >= start && d < end;
-    };
-    const isThisMonth = (d: Date) => d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-    return (leads || [])
-      .filter((l) => {
-        const d = new Date(l.dateAdded || 0);
-        return leadsTimeFilter === 'this_week' ? isThisWeek(d) : isThisMonth(d);
-      })
-      .sort((a, b) => new Date(b.dateAdded || 0).getTime() - new Date(a.dateAdded || 0).getTime())
-      .slice(0, 5);
-  }, [leads, leadsTimeFilter]);
-
-  const fetchAIInsights = React.useCallback(() => {
-    setAiInsightsLoading(true);
-    const sanitized: SanitizedDashboardData = {
-      totalPipelineValue: totalPipelineValue,
-      activeApplicationsCount: activeApplications.length,
-      tasksDueCount: tasksDueTodayCount,
-      applicationsByStage: PIPELINE_BOARD_STAGES.reduce((acc, s) => {
-        acc[s] = (pipelineByStage[s] || []).length;
-        return acc;
-      }, {} as Record<string, number>),
-      settledThisMonthCount,
-    };
-    geminiService
-      .getDashboardAIInsights(sanitized)
-      .then((text) => {
-        setAiInsights(text || '');
-        try { sessionStorage.setItem(AI_INSIGHTS_CACHE_KEY, text || ''); } catch (_) {}
-      })
-      .catch(() => setAiInsights('Unable to load insights.'))
-      .finally(() => setAiInsightsLoading(false));
-  }, [totalPipelineValue, activeApplications.length, tasksDueTodayCount, pipelineByStage, settledThisMonthCount]);
-
-  useEffect(() => {
-    try {
-      const cached = sessionStorage.getItem(AI_INSIGHTS_CACHE_KEY);
-      if (cached) setAiInsights(cached);
-      else if (!loading) fetchAIInsights();
-    } catch (_) {}
-  }, []);
-
-  useEffect(() => {
-    if (!loading && !aiInsights && !aiInsightsLoading) fetchAIInsights();
-  }, [loading]);
-
-  const cardClass = 'bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6';
   const advisorNamesById = useMemo(() => {
     const m: Record<string, string> = {};
     (advisors || []).forEach((a) => { m[a.id] = a.name; });
     return m;
   }, [advisors]);
 
-  const metricCardStyles = [
-    { backgroundColor: PASTEL.blue.bg, borderLeft: `4px solid ${PASTEL.blue.text}` },
-    { backgroundColor: PASTEL.green.bg, borderLeft: `4px solid ${PASTEL.green.text}` },
-    { backgroundColor: PASTEL.orange.bg, borderLeft: `4px solid ${PASTEL.orange.text}` },
-    { backgroundColor: PASTEL.purple.bg, borderLeft: `4px solid ${PASTEL.purple.text}` },
+  const commissionDonutData = useMemo(() => {
+    const recv = commissionReceived;
+    const exp = commissionExpected;
+    const remaining = Math.max(0, exp - recv);
+    const rows = [
+      { name: 'Received', value: recv, fill: DS.success },
+      { name: 'Remaining', value: remaining, fill: DS.accent },
+    ];
+    return rows.filter((r) => r.value > 0);
+  }, [commissionReceived, commissionExpected]);
+
+  const firmId = advisor.firmId;
+  const advisorId = advisor.id;
+
+  const firstName = advisor.name?.split(' ')[0] || 'there';
+
+  const refixDaysLeft = (expiry: string) =>
+    Math.ceil((new Date(expiry).getTime() - Date.now()) / 86400000);
+
+  const navigateToFI = (prefillMessage?: string) => {
+    if (prefillMessage) {
+      sessionStorage.setItem(FI_PREFILL_KEY, prefillMessage);
+    }
+    setCurrentView('flow-intelligence');
+  };
+
+  const widgetParams: DashboardWidgetParams = {
+    DS,
+    CARD_STYLE,
+    chartTextColor,
+    chartGridColor,
+    chartMonthCount,
+    setChartMonthCount,
+    loading,
+    appsOverTimeData,
+    stagePills,
+    activeAppsSearch,
+    setActiveAppsSearch,
+    activeAppsStageFilter,
+    setActiveAppsStageFilter,
+    setActiveAppsPage,
+    activeApplicationsPaginated,
+    activeApplicationsFiltered,
+    activeAppsPage,
+    activeAppsTotalPages,
+    workflowKey,
+    navigateToApplication,
+    setCurrentView,
+    firmId,
+    advisorId,
+    advisor,
+    briefingRefreshKey,
+    setBriefingRefreshKey,
+    tasksDueTodayCount,
+    tasksDueTodayList,
+    clientNamesById,
+    commissionDonutData,
+    commissionExpected,
+    commissionReceived,
+    clawbackRiskAmt,
+    formatCurrency,
+    refixRows,
+    refixDaysLeft,
+    refixUrgentCount,
+    bestRatesDisplay,
+    daysInStage,
+    clients,
+    navigateToClient,
+  };
+
+  const renderWidget = (id: WidgetId) => renderDashboardWidget(id, widgetParams);
+
+  const isDark = theme === 'dark';
+
+  const kpiCards = [
+    {
+      label: 'Pipeline Value',
+      value: loading ? '—' : formatCurrency(totalPipelineValue),
+      pct: pipelineKpiTrendPct,
+      icon: '💼',
+      iconBg: isDark ? '#1E1B4B' : '#EEF2FF',
+    },
+    {
+      label: 'Settled This Month',
+      value: loading ? '—' : formatCurrency(settledValueThisMonth),
+      pct: settledKpiTrendPct,
+      icon: '✓',
+      iconBg: isDark ? '#052E16' : '#F0FDF4',
+    },
+    {
+      label: 'Commission Expected',
+      value: loading ? '—' : formatCurrency(commissionExpected),
+      pct: commissionKpiTrendPct,
+      icon: '💰',
+      iconBg: isDark ? '#292524' : '#FFFBEB',
+    },
+    {
+      label: 'Active Applications',
+      value: loading ? '—' : String(activeApplicationsCount),
+      pct: metricPctChanges.activePct,
+      icon: '📋',
+      iconBg: isDark ? '#0C1A2E' : '#F0F9FF',
+    },
   ];
 
   return (
-    <div className="min-h-full rounded-xl bg-[#f8fafc] dark:bg-gray-900">
-      <div className="space-y-6 p-6">
-      {/* HEADER ROW */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
-        {advisor.role === 'admin' && (
-          <div className="inline-flex rounded-full p-1 bg-white dark:bg-gray-700 shadow-sm border border-gray-200 dark:border-gray-600">
-            <button
-              type="button"
-              onClick={() => setViewMode('my')}
-              className={`px-4 py-2 text-sm font-medium rounded-full transition-colors ${
-                viewMode === 'my'
-                  ? 'shadow-sm'
-                  : 'text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white'
-              }`}
-              style={viewMode === 'my' ? { backgroundColor: PASTEL.blue.bg, color: PASTEL.blue.text } : undefined}
-            >
-              My View
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode('firm')}
-              className={`px-4 py-2 text-sm font-medium rounded-full transition-colors ${
-                viewMode === 'firm'
-                  ? 'shadow-sm'
-                  : 'text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white'
-              }`}
-              style={viewMode === 'firm' ? { backgroundColor: PASTEL.blue.bg, color: PASTEL.blue.text } : undefined}
-            >
-              Firm View
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* ROW 1 — Two hero cards 50/50 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className={cardClass}>
-          <p className="text-sm text-gray-500 dark:text-gray-400">Total Pipeline Value</p>
-          {loading ? (
-            <div className="h-10 w-32 bg-gray-200 dark:bg-gray-600 rounded animate-pulse mt-1" />
-          ) : (
-            <p className="text-4xl font-bold text-gray-900 dark:text-white mt-1">
-              {formatCurrency(totalPipelineValue)}
-            </p>
-          )}
-          <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">
-            across {activeApplications.length} active applications
+    <div
+      className="min-h-full"
+      style={{ background: DS.bg, fontFamily: '"Plus Jakarta Sans", Inter, sans-serif', color: DS.text }}
+    >
+      <div style={{ maxWidth: 1600, margin: '0 auto' }}>
+        {/* ── Prodify page header ── */}
+        <div style={{ padding: '28px 32px 0px 32px', background: 'transparent' }}>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4, fontWeight: 500, margin: '0 0 4px' }}>
+            {new Date().toLocaleDateString('en-NZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
           </p>
-          <div className="mt-4 h-48">
-            {loading ? (
-              <div className="h-full w-full bg-gray-100 dark:bg-gray-700 rounded-lg animate-pulse" />
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={areaChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                  <defs>
-                    <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={PASTEL.blue.text} stopOpacity={0.4} />
-                      <stop offset="100%" stopColor={PASTEL.blue.text} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="month" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
-                  <YAxis hide domain={['auto', 'auto']} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'rgba(255,255,255,0.95)',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '8px',
-                    }}
-                    formatter={(value: number) => [formatCurrency(value), 'Value']}
-                    labelFormatter={(label) => label}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="value"
-                    stroke={PASTEL.blue.text}
-                    strokeWidth={2}
-                    fill="url(#areaGradient)"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-        <div className={cardClass}>
-          <p className="text-sm text-gray-500 dark:text-gray-400">Settled This Month</p>
-          {loading ? (
-            <div className="h-10 w-32 bg-gray-200 dark:bg-gray-600 rounded animate-pulse mt-1" />
-          ) : (
-            <p className="text-4xl font-bold text-gray-900 dark:text-white mt-1">
-              {formatCurrency(settledValueThisMonth)}
-            </p>
-          )}
-          <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">
-            {settledThisMonthCount} deals settled
-          </p>
-          <div className="mt-4 h-48">
-            {loading ? (
-              <div className="h-full w-full bg-gray-100 dark:bg-gray-700 rounded-lg animate-pulse" />
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={monthlySettledData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
-                  <YAxis
-                    tick={{ fontSize: 12 }}
-                    axisLine={false}
-                    tickLine={false}
-                    tickFormatter={(v) => (v >= 1e6 ? `${v / 1e6}M` : v >= 1e3 ? `${v / 1e3}K` : v)}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'rgba(255,255,255,0.95)',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '8px',
-                    }}
-                    formatter={(value: number) => [formatCurrency(value), 'Settled']}
-                  />
-                  <Bar dataKey="value" fill={PASTEL.blue.text} radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-      </div>
 
-      {/* ROW 2 — 4 metric cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        {[
-          { label: 'Active Applications', value: loading ? '—' : activeApplicationsCount.toString(), pct: metricPctChanges.activePct },
-          { label: 'New Leads This Month', value: loading ? '—' : newLeadsThisMonth.toString(), pct: metricPctChanges.leadsPct },
-          { label: 'Tasks Due Today', value: loading ? '—' : tasksDueTodayCount.toString(), pct: metricPctChanges.tasksPct },
-          { label: 'Conversion Rate', value: loading ? '—' : `${conversionRate}%`, pct: metricPctChanges.convPct },
-        ].map((m, idx) => (
-          <div
-            key={m.label}
-            className="rounded-xl shadow-sm p-6 border-l-4 dark:bg-gray-800/80"
-            style={metricCardStyles[idx]}
-          >
-            <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-              {m.label}
-            </p>
-            {loading ? (
-              <div className="h-9 w-16 bg-gray-200 dark:bg-gray-600 rounded animate-pulse mt-2" />
-            ) : (
-              <p className="text-3xl font-bold text-gray-900 dark:text-white mt-2">{m.value}</p>
-            )}
-            {!loading && m.pct !== null && (
-              <div className="mt-2 flex items-center gap-1">
-                {m.pct > 0 && <span className="text-green-600 dark:text-green-400 text-xs">↑</span>}
-                {m.pct < 0 && <span className="text-red-600 dark:text-red-400 text-xs">↓</span>}
-                {m.pct === 0 && <span className="text-gray-500 dark:text-gray-400 text-xs">→</span>}
-                <span
-                  className={`text-xs font-medium ${
-                    m.pct > 0 ? 'text-green-600 dark:text-green-400' : m.pct < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-gray-400'
-                  }`}
-                >
-                  {m.pct > 0 ? '+' : ''}{m.pct}% vs last month
-                </span>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+            <div>
+              <h1 style={{
+                fontSize: 26, fontWeight: 800, color: 'var(--text-primary)',
+                margin: '0 0 4px', letterSpacing: '-0.02em',
+                fontFamily: 'Plus Jakarta Sans, sans-serif',
+              }}>
+                Good {getTimeOfDay()}, {firstName} 👋
+              </h1>
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 20px' }}>
+                {tasksDueTodayCount > 0
+                  ? `You have ${tasksDueTodayCount} task${tasksDueTodayCount > 1 ? 's' : ''} due`
+                  : 'Your pipeline is up to date'}
+                {greetingAlertCount > 0
+                  ? ` and ${greetingAlertCount} alert${greetingAlertCount > 1 ? 's' : ''}`
+                  : ''}.
+              </p>
+            </div>
 
-      {/* ROW 4 — Pending Tasks, Recent Leads, AI Insights */}
-      <style>{`
-        @keyframes rotateBorder {
-          0% { background-position: 0% 50%; }
-          50% { background-position: 100% 50%; }
-          100% { background-position: 0% 50%; }
-        }
-        .ai-card-wrapper {
-          padding: 2px;
-          border-radius: 14px;
-          background: linear-gradient(270deg, #6366f1, #3b82f6, #06b6d4, #8b5cf6, #6366f1);
-          background-size: 400% 400%;
-          animation: rotateBorder 4s ease infinite;
-        }
-        .ai-card-inner {
-          background: white;
-          border-radius: 12px;
-          padding: 24px;
-          height: 100%;
-        }
-        .dark .ai-card-inner { background: rgb(31 41 55); }
-      `}</style>
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Pending Tasks */}
-        <div className={cardClass}>
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Pending Tasks</h3>
-          {loading ? (
-            <div className="space-y-2">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="h-12 bg-gray-100 dark:bg-gray-700 rounded-lg animate-pulse" />
-              ))}
-            </div>
-          ) : pendingTasks.length === 0 ? (
-            <p className="text-sm text-gray-500 dark:text-gray-400">No upcoming tasks.</p>
-          ) : (
-            <ul className="space-y-2">
-              {pendingTasks.map((task) => {
-                const due = task.dueDate ? new Date(task.dueDate) : null;
-                const isOverdue = due && due.getTime() < Date.now() && !task.isCompleted;
-                return (
-                  <li key={task.id}>
-                    <button
-                      type="button"
-                      onClick={() => setCurrentView('tasks')}
-                      className="w-full text-left flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50"
-                    >
-                      <span
-                        className={`flex-shrink-0 w-2 h-2 rounded-full ${
-                          task.priority === 'High' ? 'bg-red-500' : task.priority === 'Medium' ? 'bg-yellow-500' : 'bg-gray-400'
-                        }`}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-gray-900 dark:text-white text-sm truncate">{task.title}</p>
-                        <p className="text-xs text-gray-400 dark:text-gray-500 truncate">
-                          {task.clientId ? clientNamesById[task.clientId] || '—' : '—'}
-                        </p>
-                      </div>
-                      <span className={`text-xs flex-shrink-0 ${isOverdue ? 'text-red-600 dark:text-red-400 font-medium' : 'text-gray-500 dark:text-gray-400'}`}>
-                        {task.dueDate ? new Date(task.dueDate).toLocaleDateString() : '—'}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          <a
-            href="#"
-            onClick={(e) => { e.preventDefault(); setCurrentView('tasks'); }}
-            className="inline-block mt-3 text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline"
-          >
-            View all
-          </a>
-        </div>
-        {/* Recent Leads */}
-        <div className={cardClass}>
-          <div className="flex items-center justify-between gap-2 mb-4">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Recent Leads</h3>
-            <span className="flex-shrink-0 min-w-[1.75rem] h-7 px-2 flex items-center justify-center rounded-full text-xs font-medium bg-[#dbeafe] dark:bg-blue-900/40 text-[#2563eb] dark:text-blue-300">
-              {recentLeadsFiltered.length}
-            </span>
-          </div>
-          <div className="inline-flex rounded-lg p-0.5 bg-gray-100 dark:bg-gray-700 mb-4">
-            <button
-              type="button"
-              onClick={() => setLeadsTimeFilter('this_week')}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md ${leadsTimeFilter === 'this_week' ? 'bg-white dark:bg-gray-600 shadow' : ''}`}
-            >
-              This Week
-            </button>
-            <button
-              type="button"
-              onClick={() => setLeadsTimeFilter('this_month')}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md ${leadsTimeFilter === 'this_month' ? 'bg-white dark:bg-gray-600 shadow' : ''}`}
-            >
-              This Month
-            </button>
-          </div>
-          {loading ? (
-            <div className="space-y-2">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="h-14 bg-gray-100 dark:bg-gray-700 rounded-lg animate-pulse" />
-              ))}
-            </div>
-          ) : recentLeadsFiltered.length === 0 ? (
-            <p className="text-sm text-gray-500 dark:text-gray-400">No leads in this period.</p>
-          ) : (
-            <ul className="space-y-2">
-              {recentLeadsFiltered.map((l) => (
-                <li key={l.id}>
-                  <button
-                    type="button"
-                    onClick={() => navigateToClient(l.id)}
-                    className="w-full text-left flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50"
-                  >
-                    <div className="flex-shrink-0 w-9 h-9 rounded-full bg-[#dbeafe] dark:bg-blue-900/40 flex items-center justify-center text-xs font-medium text-[#2563eb] dark:text-blue-300">
-                      {(l.name || '?').slice(0, 2).toUpperCase()}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-gray-900 dark:text-white text-sm truncate">{l.name}</p>
-                      <p className="text-xs text-gray-400 dark:text-gray-500 truncate">{l.email}</p>
-                    </div>
-                    <span className="flex-shrink-0 px-2 py-0.5 text-xs rounded bg-[#dbeafe] dark:bg-blue-900/40 text-[#2563eb] dark:text-blue-300">
-                      {l.status || 'New'}
-                    </span>
-                    <span className="flex-shrink-0 text-xs text-gray-400 dark:text-gray-500">{timeAgo(l.dateAdded || '')}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        {/* AI Insights */}
-        <div className="ai-card-wrapper">
-          <div className="ai-card-inner">
-            <div className="flex items-center justify-between gap-2 mb-4">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">✨ AI Insights</h3>
-              <button
-                type="button"
-                onClick={() => { try { sessionStorage.removeItem(AI_INSIGHTS_CACHE_KEY); } catch (_) {} fetchAIInsights(); }}
-                className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline"
+            {advisor.role === 'admin' && (
+              <div
+                className="inline-flex rounded-full p-1 flex-shrink-0"
+                style={{ background: DS.card, boxShadow: DS.shadow, border: DS.border }}
               >
-                Refresh
-              </button>
-            </div>
-            {aiInsightsLoading ? (
-              <div className="flex items-center justify-center py-8">
-                <Icon name="Loader" className="h-8 w-8 animate-spin text-blue-500" />
+                <button
+                  type="button"
+                  onClick={() => setViewMode('my')}
+                  className={`px-4 py-2 text-sm font-semibold rounded-full transition-colors ${viewMode === 'my' ? 'text-white' : ''}`}
+                  style={viewMode === 'my'
+                    ? { background: 'linear-gradient(135deg, var(--accent), var(--accent-end))' }
+                    : { color: DS.textMuted }}
+                >
+                  My View
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('firm')}
+                  className={`px-4 py-2 text-sm font-semibold rounded-full transition-colors ${viewMode === 'firm' ? 'text-white' : ''}`}
+                  style={viewMode === 'firm'
+                    ? { background: 'linear-gradient(135deg, var(--accent), var(--accent-end))' }
+                    : { color: DS.textMuted }}
+                >
+                  Firm View
+                </button>
               </div>
-            ) : aiInsights ? (
-              <ul className="space-y-2 text-sm text-gray-700 dark:text-gray-300">
-                {aiInsights.split('\n').filter((l) => l.trim()).slice(0, 3).map((line, i) => {
-                  const bulletColor = i === 0 ? '#2563eb' : i === 1 ? '#ea580c' : '#16a34a';
-                  return (
-                    <li key={i} className="flex gap-2">
-                      <span className="flex-shrink-0 w-2 h-2 rounded-full mt-1.5" style={{ backgroundColor: bulletColor }} />
-                      <span>{line.replace(/^[-*•]\s*/, '').trim()}</span>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : (
-              <p className="text-sm text-gray-500 dark:text-gray-400">No insights yet. Click Refresh to generate.</p>
             )}
           </div>
-        </div>
-      </div>
 
-      {/* ROW 5 — Active Applications full-width table */}
-      <div className={cardClass}>
-        <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Active Applications</h3>
-          <div className="flex flex-wrap items-center gap-2">
-            <input
-              type="search"
-              placeholder="Search by client name..."
-              value={activeAppsSearch}
-              onChange={(e) => { setActiveAppsSearch(e.target.value); setActiveAppsPage(1); }}
-              className="px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 w-48"
-            />
-            <select
-              value={activeAppsStageFilter}
-              onChange={(e) => { setActiveAppsStageFilter(e.target.value); setActiveAppsPage(1); }}
-              className="px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700"
-            >
-              <option value="all">All stages</option>
-              {ALL_STAGES.map((s) => (
-                <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
-              ))}
-            </select>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 28, flexWrap: 'wrap' }}>
+            <div className="fi-button-wrapper" onClick={() => navigateToFI()} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') navigateToFI(); }} style={{ cursor: 'pointer' }}>
+              <div className="fi-button-inner" style={{ padding: '8px 18px', gap: 8 }}>
+                <span style={{ fontSize: 13 }}>✦</span>
+                <span style={{
+                  fontSize: 13, fontWeight: 700,
+                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                }}>Ask Flow Intelligence</span>
+              </div>
+            </div>
+
+            {suggestions.map((s, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => navigateToFI(s.message)}
+                style={{
+                  fontSize: 12, fontWeight: 500,
+                  color: 'var(--text-secondary)',
+                  background: 'var(--bg-card)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: 20, padding: '7px 14px',
+                  cursor: 'pointer', transition: 'all 0.15s',
+                  boxShadow: 'var(--shadow-card)',
+                  whiteSpace: 'nowrap',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = '#6366f1';
+                  e.currentTarget.style.color = '#6366f1';
+                  e.currentTarget.style.background = 'var(--accent-soft)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--border-color)';
+                  e.currentTarget.style.color = 'var(--text-secondary)';
+                  e.currentTarget.style.background = 'var(--bg-card)';
+                }}
+              >
+                {s.label}
+              </button>
+            ))}
           </div>
         </div>
-        {loading ? (
-          <div className="h-64 bg-gray-100 dark:bg-gray-700 rounded-lg animate-pulse" />
-        ) : (
-          <>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left text-gray-700 dark:text-gray-300">
-                <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase border-b border-gray-200 dark:border-gray-600">
-                  <tr>
-                    <th className="py-2 pr-2">Reference</th>
-                    <th className="py-2 px-2">Client Name</th>
-                    <th className="py-2 px-2">Loan Amount</th>
-                    <th className="py-2 px-2">Type</th>
-                    <th className="py-2 px-2">Stage</th>
-                    <th className="py-2 px-2">Assigned To</th>
-                    <th className="py-2 px-2">Days Active</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                  {activeApplicationsPaginated.map((app) => {
-                    const stage = workflowKey(app);
-                    const pill = STAGE_PASTEL[stage] || { bg: '#dbeafe', text: '#2563eb' };
-                    return (
-                      <tr
-                        key={app.id}
-                        onClick={() => navigateToApplication(app.id)}
-                        className="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
-                      >
-                        <td className="py-2 pr-2 font-medium text-gray-900 dark:text-white">{app.referenceNumber || '—'}</td>
-                        <td className="py-2 px-2">{app.clientName}</td>
-                        <td className="py-2 px-2">{app.loanAmount ? formatCurrency(app.loanAmount) : '—'}</td>
-                        <td className="py-2 px-2 text-gray-500 dark:text-gray-400">—</td>
-                        <td className="py-2 px-2">
-                          <span className="px-2 py-0.5 text-xs font-medium rounded-full" style={{ backgroundColor: pill.bg, color: pill.text }}>
-                            {stage.charAt(0).toUpperCase() + stage.slice(1)}
-                          </span>
-                        </td>
-                        <td className="py-2 px-2">{advisorNamesById[app.advisorId] || '—'}</td>
-                        <td className="py-2 px-2">{daysInStage(app)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            {activeApplicationsFiltered.length === 0 && (
-              <p className="py-6 text-center text-gray-500 dark:text-gray-400">No active applications.</p>
-            )}
-            {activeAppsTotalPages > 1 && (
-              <div className="flex items-center justify-between pt-4 border-t border-gray-200 dark:border-gray-600 mt-4">
-                <span className="text-sm text-gray-500 dark:text-gray-400">
-                  Page {activeAppsPage} of {activeAppsTotalPages} ({activeApplicationsFiltered.length} total)
+
+        {/* ── KPI cards ── */}
+        <div
+          className="dash-kpi-grid"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(4, 1fr)',
+            gap: 16,
+            padding: '0 32px',
+            marginBottom: 24,
+          }}
+        >
+          {kpiCards.map((k) => (
+            <div
+              key={k.label}
+              style={{
+                background: 'var(--bg-card)',
+                borderRadius: 16,
+                padding: '20px 24px',
+                border: '1px solid var(--border-color)',
+                boxShadow: 'var(--shadow-card)',
+                minHeight: 110,
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <span style={{
+                  fontSize: 11, fontWeight: 700, color: 'var(--text-muted)',
+                  textTransform: 'uppercase', letterSpacing: '0.06em',
+                }}>
+                  {k.label}
                 </span>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setActiveAppsPage((p) => Math.max(1, p - 1))}
-                    disabled={activeAppsPage <= 1}
-                    className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-600 disabled:opacity-50"
-                  >
-                    Previous
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveAppsPage((p) => Math.min(activeAppsTotalPages, p + 1))}
-                    disabled={activeAppsPage >= activeAppsTotalPages}
-                    className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-600 disabled:opacity-50"
-                  >
-                    Next
-                  </button>
+                <div style={{
+                  width: 32, height: 32, borderRadius: 8,
+                  background: k.iconBg,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 16,
+                }}>
+                  {k.icon}
                 </div>
               </div>
-            )}
+
+              {loading ? (
+                <div className="h-8 w-24 rounded animate-pulse" style={{ background: 'var(--border-color)' }} />
+              ) : (
+                <div style={{
+                  fontSize: 28, fontWeight: 800, color: 'var(--text-primary)',
+                  letterSpacing: '-0.02em', lineHeight: 1, marginBottom: 8,
+                }}>
+                  {k.value}
+                </div>
+              )}
+
+              {!loading && k.pct != null && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{
+                    fontSize: 11, fontWeight: 600,
+                    color: k.pct > 0 ? 'var(--success)' : k.pct < 0 ? 'var(--danger)' : 'var(--text-muted)',
+                  }}>
+                    {k.pct > 0 ? '↑' : k.pct < 0 ? '↓' : '→'} {k.pct > 0 ? '+' : ''}{k.pct}%
+                  </span>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>vs last month</span>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* ── Customise button ── */}
+        <div style={{ padding: '0 32px', marginBottom: 16, display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            type="button"
+            onClick={() => setShowCustomise(true)}
+            style={{
+              fontSize: 12,
+              color: 'var(--text-secondary)',
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 8,
+              padding: '6px 14px',
+              cursor: 'pointer',
+            }}
+          >
+            ⊞ Customise
+          </button>
+        </div>
+
+        {/* ── Customise panel ── */}
+        {showCustomise && (
+          <>
+            <div
+              className="fixed inset-0 z-40 bg-black/40"
+              role="presentation"
+              aria-hidden
+              onClick={() => setShowCustomise(false)}
+            />
+            <div
+              className="fixed top-0 right-0 bottom-0 z-50 flex flex-col overflow-y-auto"
+              style={{
+                width: 320,
+                background: 'var(--bg-card)',
+                borderLeft: '1px solid var(--border-color)',
+                boxShadow: 'var(--shadow-card)',
+              }}
+            >
+              <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: 'var(--border-color)' }}>
+                <h2 className="m-0 text-[15px] font-bold" style={{ color: 'var(--text-primary)' }}>
+                  Customise Dashboard
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setShowCustomise(false)}
+                  className="p-1.5 rounded-lg border-none cursor-pointer bg-transparent"
+                  style={{ color: 'var(--text-muted)' }}
+                  aria-label="Close"
+                >
+                  <Icon name="X" className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="p-4 space-y-4 flex-1">
+                {WIDGET_CUSTOMISE_ORDER.map((wid) => {
+                  const w = widgetLayout.find((x) => x.id === wid);
+                  const on = w?.visible ?? true;
+                  return (
+                    <label key={wid} className="flex items-center justify-between gap-3 cursor-pointer">
+                      <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>{WIDGET_LABELS[wid]}</span>
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={(e) => toggleWidgetVisible(wid, e.target.checked)}
+                        className="h-4 w-4 accent-indigo-600"
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+              <div className="p-4 border-t" style={{ borderColor: 'var(--border-color)' }}>
+                <button
+                  type="button"
+                  onClick={() => resetWidgetLayoutToDefault()}
+                  className="w-full py-2.5 rounded-lg text-[13px] font-semibold border-none cursor-pointer"
+                  style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}
+                >
+                  Reset to default
+                </button>
+              </div>
+            </div>
           </>
         )}
-      </div>
+
+        {/* ── Widget grid ── */}
+        <style>{`
+          @media (max-width: 767px) {
+            .dash-widget-slot {
+              grid-column: 1 / -1 !important;
+            }
+          }
+          @media (max-width: 1023px) {
+            .dash-kpi-grid {
+              grid-template-columns: repeat(2, 1fr) !important;
+            }
+          }
+          @media (max-width: 639px) {
+            .dash-kpi-grid {
+              grid-template-columns: 1fr !important;
+            }
+          }
+        `}</style>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={visibleWidgets.map((w) => w.id)} strategy={rectSortingStrategy}>
+            <div
+              className="dashboard-dnd-grid min-w-0"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(12, minmax(0, 1fr))',
+                gap: 16,
+                padding: '0 32px',
+                paddingBottom: 32,
+              }}
+            >
+              {visibleWidgets.length === 0 ? (
+                <p className="col-span-full" style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                  No widgets visible. Use Customise to show cards.
+                </p>
+              ) : (
+                visibleWidgets.map((w) => (
+                  <SortableDashboardWidget key={w.id} id={w.id} size={w.size}>
+                    {renderWidget(w.id)}
+                  </SortableDashboardWidget>
+                ))
+              )}
+            </div>
+          </SortableContext>
+        </DndContext>
       </div>
     </div>
   );

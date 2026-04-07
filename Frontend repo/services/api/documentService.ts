@@ -1,4 +1,5 @@
 import type { Document, DocumentFolder, KYCDocument, KYCSection, Notification } from '../../types';
+import { logger } from '../../utils/logger';
 import { supabase } from '../supabaseClient';
 import { authService } from './authService';
 import { toSupabaseFirmId } from './clientService';
@@ -34,6 +35,7 @@ export const documentService = {
                 id: doc.id,
                 firmId: doc.firm_id,
                 clientId: doc.client_id,
+                applicationId: doc.application_id || undefined,
                 name: doc.name,
                 category: doc.category as Document['category'],
                 folderId: doc.folder_id || undefined,
@@ -42,11 +44,13 @@ export const documentService = {
                 url: doc.url,
                 expiryDate: doc.expiry_date ? new Date(doc.expiry_date).toISOString().slice(0, 10) : undefined,
                 status,
+                parseStatus: doc.parse_status || undefined,
+                detectedType: doc.detected_type || undefined,
             };
         });
         return documentsWithStatus;
     } catch (err) {
-        console.error('Failed to load documents:', err);
+        logger.error('Failed to load documents:', err);
         return [];
     }
   },
@@ -73,6 +77,8 @@ export const documentService = {
             name: file.name,
             category,
             url: publicUrl,
+            file_type: file.type,
+            file_size_bytes: file.size,
             upload_date: new Date().toISOString().slice(0, 10),
             folder_id: folderId || null,
         }])
@@ -140,7 +146,7 @@ export const documentService = {
             name: f.name,
         }));
     } catch (err) {
-        console.error('Failed to load folders:', err);
+        logger.error('Failed to load folders:', err);
         return [];
     }
   },
@@ -205,7 +211,7 @@ export const documentService = {
             };
         });
     } catch (err) {
-        console.error('Failed to load KYC documents:', err);
+        logger.error('Failed to load KYC documents:', err);
         return [];
     }
   },
@@ -232,6 +238,8 @@ export const documentService = {
             name: file.name,
             category: 'ID',
             url: publicUrl,
+            file_type: file.type,
+            file_size_bytes: file.size,
             upload_date: new Date().toISOString().slice(0, 10),
             kyc_section: kycSection,
             expiry_date: expiryDate || null,
@@ -328,7 +336,7 @@ export const documentService = {
             createdAt: n.created_at,
         }));
     } catch (err) {
-        console.error('Failed to load notifications:', err);
+        logger.error('Failed to load notifications:', err);
         return [];
     }
   },

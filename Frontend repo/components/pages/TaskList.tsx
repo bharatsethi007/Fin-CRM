@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { logger } from '../../utils/logger';
 import { crmService } from '../../services/api';
 import type { Task, Advisor } from '../../types';
 import { Button } from '../common/Button';
@@ -125,7 +126,7 @@ const TaskList: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [advisors, setAdvisors] = useState<Advisor[]>([]);
 
-  const fetchData = () => {
+  const fetchData = useCallback(() => {
     setIsLoading(true);
     Promise.all([crmService.getTasks(), crmService.getAdvisors()])
       .then(([tasksData, advisorsData]) => {
@@ -134,12 +135,12 @@ const TaskList: React.FC = () => {
         setIsLoading(false);
       })
       .catch(() => setIsLoading(false));
-  };
+  }, []);
 
   useEffect(() => {
     fetchData();
-  }, []);
-  
+  }, [fetchData]);
+
   const tasksForSelectedDate = useMemo(() => {
     if (!selectedDate || !tasks) return [];
     const selectedDateString = selectedDate.toISOString().split('T')[0];
@@ -159,7 +160,7 @@ const TaskList: React.FC = () => {
     crmService.updateTask(taskId, { assigneeId: advisorId ?? '' })
       .then(() => fetchData())
       .catch((err) => {
-        console.error('Failed to update assignee', err);
+        logger.error('Failed to update assignee', err);
         fetchData();
       });
   };

@@ -1,29 +1,44 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { logger } from '../utils/logger';
+
+/** Mirrors Gemini JSON schema type enum for `responseSchema` (no @google/genai dependency). */
+const Type = {
+  STRING: 'STRING',
+  NUMBER: 'NUMBER',
+  BOOLEAN: 'BOOLEAN',
+  ARRAY: 'ARRAY',
+  OBJECT: 'OBJECT',
+} as const;
 import { crmService } from "./api";
 import type { Client, AIRecommendationResponse, BankRates, AIComplianceResult } from '../types';
+import { invokeGeminiProxy } from './geminiProxy';
+import { invokeOpenAIProxy } from './openaiProxy';
 
-const GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY || import.meta.env.VITE_API_KEY || '';
-const hasGeminiKey = Boolean(GEMINI_KEY);
+const MODEL_FLASH = 'gemini-2.5-flash';
 
-function getAi(): GoogleGenAI | null {
-  if (!hasGeminiKey) return null;
-  return new GoogleGenAI({ apiKey: String(GEMINI_KEY) });
+/** Gemini is configured server-side (Supabase `gemini-proxy` + GEMINI_API_KEY secret). */
+export const isGeminiConfigured = (): boolean => true;
+
+async function geminiGenerate(
+  prompt: string,
+  generationConfig?: Record<string, unknown>,
+): Promise<string> {
+  const { text } = await invokeGeminiProxy({
+    model: MODEL_FLASH,
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig,
+  });
+  return text;
 }
 
-export const isGeminiConfigured = (): boolean => hasGeminiKey;
-
 const getDashboardInsights = async (prompt: string): Promise<string> => {
-  const ai = getAi();
-  if (!ai) throw new Error('Gemini API key is not configured. Add GEMINI_API_KEY in environment variables to enable AI features.');
   try {
     const crmData = await crmService.getAllDataForAI();
-    // We simplify the data to only include key fields to fit within the prompt limits
     const simplifiedData = {
       leads: crmData.leads.map(({ name, status, estimatedLoanAmount, dateAdded }) => ({ name, status, estimatedLoanAmount, dateAdded })),
       applications: crmData.applications.map(({ clientName, status, loanAmount, estSettlementDate }) => ({ clientName, status, loanAmount, estSettlementDate })),
       tasks: crmData.tasks.map(({ title, dueDate, isCompleted, priority }) => ({ title, dueDate, isCompleted, priority })),
     };
-    
+
     const dataContext = JSON.stringify(simplifiedData, null, 2);
 
     const fullPrompt = `
@@ -42,19 +57,13 @@ const getDashboardInsights = async (prompt: string): Promise<string> => {
       Your Answer:
     `;
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: fullPrompt,
-    });
-
-    return response.text;
+    return await geminiGenerate(fullPrompt);
   } catch (error) {
-    console.error("Error calling Gemini API:", error);
+    logger.error("Error calling Gemini API:", error);
     throw new Error("Failed to get insights from AI assistant.");
   }
 };
 
-/** Sanitized dashboard data (no PII). Used for AI Insights card. */
 export type SanitizedDashboardData = {
   totalPipelineValue: number;
   activeApplicationsCount: number;
@@ -63,17 +72,10 @@ export type SanitizedDashboardData = {
   settledThisMonthCount: number;
 };
 
-/** Get 3 short bullet insights from Gemini based on sanitized dashboard data only (no client names or PII). */
 export const getDashboardAIInsights = async (data: SanitizedDashboardData): Promise<string> => {
-  const ai = getAi();
-  if (!ai) throw new Error('Gemini API key is not configured.');
   const dataStr = JSON.stringify(data, null, 2);
   const fullPrompt = `You are an AI assistant for a NZ mortgage broker dashboard. Based on this data, give 3 short bullet point insights and suggestions. Each bullet max 15 words. Focus on: what needs attention, pipeline health, one opportunity. Data: ${dataStr}`;
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: fullPrompt,
-  });
-  return response.text ?? '';
+  return geminiGenerate(fullPrompt);
 };
 
 const BANK_STATEMENT_PROMPT = `You are a NZ mortgage broker assistant analysing a bank statement.
@@ -122,16 +124,10 @@ Also identify any regular income credits and loan repayments and include them in
 
 Statement content:`;
 
-/** Parse bank statement (CSV text or PDF base64) and return raw JSON string. Caller must JSON.parse. */
 export const parseBankStatement = async (statementContent: string, isPdf?: boolean): Promise<string> => {
-  const ai = getAi();
-  if (!ai) throw new Error('Gemini API key is not configured.');
+  void isPdf;
   const fullPrompt = BANK_STATEMENT_PROMPT + '\n\n' + statementContent;
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: fullPrompt,
-  });
-  return response.text ?? '';
+  return geminiGenerate(fullPrompt);
 };
 
 const getLenderRecommendation = async (
@@ -139,10 +135,8 @@ const getLenderRecommendation = async (
   lendingDetails: { loanAmount: number; purpose: string; term: number },
   interestRates: BankRates[]
 ): Promise<Omit<AIRecommendationResponse, 'recommendationId'>> => {
-    const ai = getAi();
-    if (!ai) throw new Error('Gemini API key is not configured. Add GEMINI_API_KEY in environment variables to enable AI features.');
-    try {
-        const fullPrompt = `
+  try {
+    const fullPrompt = `
         You are an expert mortgage advisor AI for AdvisorFlow in New Zealand. Your task is to provide lender recommendations for a client based on their profile, loan requirements, and current interest rates.
 
         **Client Profile:**
@@ -182,53 +176,46 @@ const getLenderRecommendation = async (
         Provide the output in the specified JSON format.
       `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: fullPrompt,
-        config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                    assessmentSummary: {
-                        type: Type.STRING,
-                        description: "A summary of the assessment of the client's financial situation and ability to repay.",
-                    },
-                    recommendations: {
-                        type: Type.ARRAY,
-                        description: "An array of recommended lenders.",
-                        items: {
-                            type: Type.OBJECT,
-                            properties: {
-                                lender: { type: Type.STRING, description: "The name of the recommended lender." },
-                                confidenceScore: { type: Type.NUMBER, description: "A score from 0.0 to 1.0 indicating suitability." },
-                                rationale: { type: Type.STRING, description: "The reasoning behind the recommendation." },
-                                pros: { type: Type.ARRAY, items: { type: Type.STRING } },
-                                cons: { type: Type.ARRAY, items: { type: Type.STRING } },
-                                interestRate: { type: Type.STRING, description: "The most relevant interest rate, e.g., '6.79% (2-Year Fixed)'." }
-                            },
-                            required: ['lender', 'confidenceScore', 'rationale', 'pros', 'cons', 'interestRate'],
-                        },
-                    },
-                },
-                required: ['assessmentSummary', 'recommendations'],
+    const text = await geminiGenerate(fullPrompt, {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          assessmentSummary: {
+            type: Type.STRING,
+            description: "A summary of the assessment of the client's financial situation and ability to repay.",
+          },
+          recommendations: {
+            type: Type.ARRAY,
+            description: "An array of recommended lenders.",
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                lender: { type: Type.STRING, description: "The name of the recommended lender." },
+                confidenceScore: { type: Type.NUMBER, description: "A score from 0.0 to 1.0 indicating suitability." },
+                rationale: { type: Type.STRING, description: "The reasoning behind the recommendation." },
+                pros: { type: Type.ARRAY, items: { type: Type.STRING } },
+                cons: { type: Type.ARRAY, items: { type: Type.STRING } },
+                interestRate: { type: Type.STRING, description: "The most relevant interest rate, e.g., '6.79% (2-Year Fixed)'." },
+              },
+              required: ['lender', 'confidenceScore', 'rationale', 'pros', 'cons', 'interestRate'],
             },
+          },
         },
-      });
+        required: ['assessmentSummary', 'recommendations'],
+      },
+    });
 
-      return JSON.parse(response.text);
-
-    } catch (error) {
-        console.error("Error calling Gemini API for lender recommendation:", error);
-        throw new Error("Failed to get lender recommendation from AI assistant.");
-    }
+    return JSON.parse(text);
+  } catch (error) {
+    logger.error("Error calling Gemini API for lender recommendation:", error);
+    throw new Error("Failed to get lender recommendation from AI assistant.");
+  }
 };
 
 const summarizeAndExtractActions = async (transcript: string): Promise<{ summary: string; actions: string[] }> => {
-    const ai = getAi();
-    if (!ai) throw new Error('Gemini API key is not configured. Add GEMINI_API_KEY in environment variables to enable AI features.');
-    try {
-        const fullPrompt = `
+  try {
+    const fullPrompt = `
         You are an AI assistant for a mortgage broker. Your task is to process a meeting transcript.
         1. Provide a concise summary of the meeting.
         2. Extract any clear action items for the broker or the client. List them as bullet points.
@@ -241,42 +228,35 @@ const summarizeAndExtractActions = async (transcript: string): Promise<{ summary
         Please provide the output in the specified JSON format.
         `;
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: fullPrompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        summary: {
-                            type: Type.STRING,
-                            description: "A concise summary of the meeting.",
-                        },
-                        actions: {
-                            type: Type.ARRAY,
-                            description: "A list of action items.",
-                            items: { type: Type.STRING },
-                        },
-                    },
-                    required: ['summary', 'actions'],
-                },
-            },
-        });
+    const text = await geminiGenerate(fullPrompt, {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          summary: {
+            type: Type.STRING,
+            description: "A concise summary of the meeting.",
+          },
+          actions: {
+            type: Type.ARRAY,
+            description: "A list of action items.",
+            items: { type: Type.STRING },
+          },
+        },
+        required: ['summary', 'actions'],
+      },
+    });
 
-        return JSON.parse(response.text);
-
-    } catch (error) {
-        console.error("Error calling Gemini API for summarization:", error);
-        throw new Error("Failed to summarize transcript.");
-    }
+    return JSON.parse(text);
+  } catch (error) {
+    logger.error("Error calling Gemini API for summarization:", error);
+    throw new Error("Failed to summarize transcript.");
+  }
 };
 
 const analyzeCompliance = async (text: string): Promise<AIComplianceResult> => {
-    const ai = getAi();
-    if (!ai) throw new Error('Gemini API key is not configured. Add GEMINI_API_KEY in environment variables to enable AI features.');
-    try {
-        const fullPrompt = `
+  try {
+    const fullPrompt = `
         You are a compliance officer AI for a financial advisory firm in New Zealand.
         Your task is to analyze a communication (note or email) for potential compliance risks.
         
@@ -296,35 +276,29 @@ const analyzeCompliance = async (text: string): Promise<AIComplianceResult> => {
         Respond in the specified JSON format.
         `;
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: fullPrompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        isCompliant: {
-                            type: Type.BOOLEAN,
-                            description: "True if no compliance issues are found, otherwise false.",
-                        },
-                        reason: {
-                            type: Type.STRING,
-                            description: "A brief explanation if isCompliant is false. Null if compliant.",
-                        },
-                    },
-                    required: ['isCompliant', 'reason'],
-                },
-            },
-        });
-        
-        return JSON.parse(response.text) as AIComplianceResult;
+    const responseText = await geminiGenerate(fullPrompt, {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          isCompliant: {
+            type: Type.BOOLEAN,
+            description: "True if no compliance issues are found, otherwise false.",
+          },
+          reason: {
+            type: Type.STRING,
+            description: "A brief explanation if isCompliant is false. Null if compliant.",
+          },
+        },
+        required: ['isCompliant', 'reason'],
+      },
+    });
 
-    } catch (error) {
-        console.error("Error calling Gemini API for compliance check:", error);
-        // Default to compliant to avoid blocking user flow on API error
-        return { isCompliant: true, reason: null };
-    }
+    return JSON.parse(responseText) as AIComplianceResult;
+  } catch (error) {
+    logger.error("Error calling Gemini API for compliance check:", error);
+    return { isCompliant: true, reason: null };
+  }
 };
 
 export type StatementOfAdviceResponse = {
@@ -337,8 +311,6 @@ export type StatementOfAdviceResponse = {
 };
 
 const generateStatementOfAdvice = async (sanitisedApplicationData: string): Promise<StatementOfAdviceResponse> => {
-  const ai = getAi();
-  if (!ai) throw new Error('Could not generate summary. Check your Gemini API key is set in .env as VITE_GEMINI_API_KEY');
   const fullPrompt = `You are a New Zealand mortgage adviser compliance assistant helping prepare a Statement of Advice under the Financial Markets Conduct Act.
 
 Generate a professional advice summary for this mortgage application. Return ONLY valid JSON with no markdown, no backticks, no explanation - just the raw JSON object:
@@ -352,50 +324,41 @@ Generate a professional advice summary for this mortgage application. Return ONL
 }
 
 Application data (all PII removed): ${sanitisedApplicationData}`;
+
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: fullPrompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            recommendation: { type: Type.STRING, description: '2-3 sentence summary of the loan recommendation' },
-            whyThisLender: { type: Type.STRING, description: 'Paragraph explaining why this lender suits this applicant profile' },
-            whyNotOthers: { type: Type.STRING, description: 'Brief notes on 2 alternative NZ lenders considered and why not selected' },
-            meetsNeeds: { type: Type.STRING, description: 'How this recommendation meets the stated loan purpose and client needs' },
-            risks: { type: Type.STRING, description: '3-5 key risks specific to this application that must be disclosed' },
-            advisorNotes: { type: Type.STRING, description: 'Compliance considerations specific to NZ mortgage advice' },
-          },
-          required: ['recommendation', 'whyThisLender', 'whyNotOthers', 'meetsNeeds', 'risks', 'advisorNotes'],
+    const responseText = await geminiGenerate(fullPrompt, {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          recommendation: { type: Type.STRING, description: '2-3 sentence summary of the loan recommendation' },
+          whyThisLender: { type: Type.STRING, description: 'Paragraph explaining why this lender suits this applicant profile' },
+          whyNotOthers: { type: Type.STRING, description: 'Brief notes on 2 alternative NZ lenders considered and why not selected' },
+          meetsNeeds: { type: Type.STRING, description: 'How this recommendation meets the stated loan purpose and client needs' },
+          risks: { type: Type.STRING, description: '3-5 key risks specific to this application that must be disclosed' },
+          advisorNotes: { type: Type.STRING, description: 'Compliance considerations specific to NZ mortgage advice' },
         },
+        required: ['recommendation', 'whyThisLender', 'whyNotOthers', 'meetsNeeds', 'risks', 'advisorNotes'],
       },
     });
-    return JSON.parse(response.text) as StatementOfAdviceResponse;
+    return JSON.parse(responseText) as StatementOfAdviceResponse;
   } catch (error) {
-    console.error('Error calling Gemini API for statement of advice:', error);
-    throw new Error('Could not generate summary. Check your Gemini API key is set in .env as VITE_GEMINI_API_KEY');
+    logger.error('Error calling Gemini API for statement of advice:', error);
+    throw new Error('Could not generate summary. Ensure GEMINI_API_KEY is set in Supabase secrets for gemini-proxy.');
   }
 };
 
 const generateContent = async (prompt: string): Promise<string> => {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!apiKey) throw new Error('Gemini API key is not configured. Set VITE_GEMINI_API_KEY in .env');
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+  const { content } = await invokeOpenAIProxy(
     {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-      }),
-    }
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 1024,
+    },
+    { feature: 'gemini_service_generate_content' },
   );
-  const data = await response.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (text == null) throw new Error(data?.error?.message || 'Invalid response from Gemini');
-  return text;
+  if (!content) throw new Error('No response from AI');
+  return content;
 };
 
 export const geminiService = {

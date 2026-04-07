@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { logger } from '../../utils/logger';
 import { createPortal } from 'react-dom';
 import type { KYCDocument } from '../../types';
 import { KYC_SECTION_LABELS, KYC_SECTIONS, REMINDER_OPTIONS } from '../../types';
@@ -70,7 +71,7 @@ const KYCTab: React.FC<KYCTabProps> = ({ clientId, clientName, onUpdated }) => {
       fetchDocuments();
       onUpdated?.();
     } catch (err) {
-      console.error('Upload failed:', err);
+      logger.error('Upload failed:', err);
       alert('Failed to upload. Please try again.');
     } finally {
       setIsUploading(false);
@@ -85,7 +86,7 @@ const KYCTab: React.FC<KYCTabProps> = ({ clientId, clientName, onUpdated }) => {
       setEditingExpiryValue('');
       fetchDocuments();
     } catch (err) {
-      console.error('Failed to update expiry:', err);
+      logger.error('Failed to update expiry:', err);
       alert('Failed to update expiry date.');
     }
   };
@@ -100,7 +101,7 @@ const KYCTab: React.FC<KYCTabProps> = ({ clientId, clientName, onUpdated }) => {
       setRenamingDocName('');
       fetchDocuments();
     } catch (err) {
-      console.error('Failed to rename:', err);
+      logger.error('Failed to rename:', err);
       alert('Failed to rename document.');
     }
   };
@@ -112,7 +113,7 @@ const KYCTab: React.FC<KYCTabProps> = ({ clientId, clientName, onUpdated }) => {
       fetchDocuments();
       onUpdated?.();
     } catch (err) {
-      console.error('Failed to delete:', err);
+      logger.error('Failed to delete:', err);
       alert('Failed to delete document.');
     }
   };
@@ -128,7 +129,7 @@ const KYCTab: React.FC<KYCTabProps> = ({ clientId, clientName, onUpdated }) => {
       setReminderModalDays(null);
       fetchDocuments();
     } catch (err) {
-      console.error('Failed to set reminder:', err);
+      logger.error('Failed to set reminder:', err);
       alert('Failed to set reminder.');
     }
   };

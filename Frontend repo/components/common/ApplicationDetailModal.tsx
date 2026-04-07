@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { logger } from '../../utils/logger';
 import type { Application, Client, Note, Document } from '../../types';
 import { crmService } from '../../services/api';
 import { geminiService } from '../../services/geminiService';
@@ -84,7 +85,7 @@ export const ApplicationDetailModal: React.FC<ApplicationDetailModalProps> = ({ 
             onUpdate();
             alert("Application details saved!");
         } catch (error) {
-            console.error("Failed to save details:", error);
+            logger.error("Failed to save details:", error);
             alert("Error saving details.");
         }
     };
@@ -116,7 +117,7 @@ export const ApplicationDetailModal: React.FC<ApplicationDetailModalProps> = ({ 
             await fetchData(); 
             onUpdate(); 
         } catch (error: unknown) {
-            console.error('Failed to save note:', error);
+            logger.error('Failed to save note:', error);
             alert(error instanceof Error ? error.message : 'There was an error saving the note.');
         } finally {
             setIsSubmittingNote(false);

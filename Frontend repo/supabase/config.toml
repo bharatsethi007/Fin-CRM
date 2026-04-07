@@ -1,0 +1,11 @@
+# Supabase CLI — https://supabase.com/docs/guides/cli/config
+# Set project_id when linking: supabase link --project-ref <ref>
+
+[functions.revoke-akahu-tokens]
+verify_jwt = true
+
+[functions.delete-advisor-account]
+verify_jwt = true
+
+[functions.parse-bank-statement]
+verify_jwt = false

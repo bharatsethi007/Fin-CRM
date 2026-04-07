@@ -1,0 +1,163 @@
+@import 'tailwindcss';
+@config '../tailwind.config.ts';
+
+:root {
+  --color-background-primary: #ffffff;
+  --bg-primary: #f8f9fc;
+  --bg-card: #ffffff;
+  --bg-sidebar: #ffffff;
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+  --border-color: rgba(0, 0, 0, 0.06);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.06), 0 4px 16px rgba(0, 0, 0, 0.04);
+  --accent: #6366f1;
+  --accent-soft: #eef2ff;
+  --accent-end: #8b5cf6;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --sidebar-active-bg: #eef2ff;
+  --sidebar-active-text: #6366f1;
+}
+
+.dark {
+  --color-background-primary: #1a1d27;
+  --bg-primary: #0f1117;
+  --bg-card: #1a1d27;
+  --bg-sidebar: #13151f;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --border-color: rgba(255, 255, 255, 0.06);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.2);
+  --accent: #818cf8;
+  --accent-soft: #1e1b4b;
+  --accent-end: #a78bfa;
+  --success: #34d399;
+  --warning: #fcd34d;
+  --danger: #f87171;
+  --sidebar-active-bg: #1e1b4b;
+  --sidebar-active-text: #818cf8;
+}
+
+html {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'Plus Jakarta Sans', Inter, system-ui, sans-serif;
+}
+
+/* Flow Intelligence header button */
+@keyframes borderRotate {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes swooshLight {
+  0%   { transform: translateX(-150%) skewX(-20deg); opacity: 0; }
+  30%  { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { transform: translateX(300%) skewX(-20deg); opacity: 0; }
+}
+
+.fi-button-wrapper {
+  position: relative;
+  border-radius: 10px;
+  padding: 2px;
+  background: linear-gradient(
+    135deg,
+    #6366f1, #8b5cf6, #06b6d4, #6366f1, #8b5cf6
+  );
+  background-size: 300% 300%;
+  animation: borderRotate 3s ease infinite;
+}
+
+.fi-button-inner {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-card);
+  border-radius: 8px;
+  padding: 7px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fi-button-inner::after {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 40%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(99, 102, 241, 0.12),
+    transparent
+  );
+  animation: swooshLight 2.5s ease-in-out infinite;
+}
+
+/* Overview / application AI gradient buttons (was inline on ApplicationDetailPage) */
+@keyframes rotateBorder {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.ai-button-wrapper {
+  padding: 2px;
+  border-radius: 10px;
+  background: linear-gradient(270deg, #7c3aed, #2563eb, #06b6d4, #7c3aed);
+  background-size: 300% 300%;
+  animation: rotateBorder 3s ease infinite;
+  display: inline-block;
+}
+
+.ai-button-wrapper.loading {
+  animation-duration: 6s;
+  background: linear-gradient(270deg, #6b7280, #9ca3af, #d1d5db, #6b7280);
+  background-size: 300% 300%;
+}
+
+.ai-button-inner {
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-weight: 600;
+  color: #7c3aed;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  border: none;
+  width: 100%;
+  font-size: 0.875rem;
+  transition: all 0.2s ease;
+}
+
+.ai-button-inner:hover:not(:disabled) {
+  background: transparent !important;
+  color: white;
+}
+
+.ai-button-inner:disabled {
+  cursor: not-allowed;
+  color: #6b7280;
+}
+
+.ai-button-wrapper.loading .ai-button-inner:hover {
+  color: #e5e7eb;
+}

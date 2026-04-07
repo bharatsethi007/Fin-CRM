@@ -4,6 +4,12 @@ import { SettingsSidebar } from '../settings/SettingsSidebar';
 import { ProfileSettings } from '../settings/ProfileSettings';
 import { EmailSettings } from '../settings/EmailSettings';
 import { DisclosureStatement } from '../compliance/DisclosureStatement';
+import { FirmProfileSettings } from '../settings/FirmProfileSettings';
+import { BrandingSettings } from '../settings/BrandingSettings';
+import { AISkillsSettings } from '../settings/AISkillsSettings';
+import { TaskAutomationSettings } from '../settings/TaskAutomationSettings';
+import { LicenceSettings } from '../settings/LicenceSettings';
+import { MFASettings } from '../settings/MFASettings';
 import { Icon } from '../common/Icon';
 import { SETTINGS_NAV_ITEMS } from '../settings/settingsConstants';
 
@@ -40,6 +46,29 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ advisor, onBack, initialSec
         return <EmailSettings />;
       case 'disclosure-statement':
         return <DisclosureStatement advisorId={advisor.id} firmId={advisor.firmId} />;
+      case 'firm-profile':
+        return <FirmProfileSettings advisorId={advisor?.id} firmId={advisor?.firmId} />;
+      case 'branding':
+        return <BrandingSettings />;
+      case 'ai-skills':
+        return <AISkillsSettings advisor={advisor} />;
+      case 'task-automation':
+        return <TaskAutomationSettings advisor={advisor} />;
+      case 'licence':
+        return <LicenceSettings />;
+      case 'mfa':
+        return <MFASettings advisor={advisor} />;
+      case 'security':
+        return (
+          <div className="max-w-2xl space-y-4 p-2">
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Use two-factor authentication (2FA) to protect your account. You can enroll an authenticator app from the account security flow when available.
+            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-500">
+              If your organisation enforces MFA, complete setup here before accessing sensitive client data.
+            </p>
+          </div>
+        );
       default:
         return (
             <div className="p-8 text-center text-gray-500 flex flex-col items-center justify-center h-full">

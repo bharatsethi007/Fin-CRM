@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { applicationService, type Applicant } from '../../services/applicationService';
+import { applicationService, type Applicant } from '../../services/api';
 import { Button } from '../common/Button';
 import { Icon } from '../common/Icon';
 import { NZ_REGIONS, NZ_RESIDENCY_STATUS } from '../../constants';

@@ -1,11 +1,18 @@
 import React, { useState, useEffect } from 'react';
+import { logger } from '../../utils/logger';
 import { Button } from '../common/Button';
 import { Icon } from '../common/Icon';
 import { Card } from '../common/Card';
-import { applicationService, type Applicant } from '../../services/applicationService';
+import { applicationService, type Applicant } from '../../services/api';
 import type { BankRates, AIRecommendationResponse } from '../../types';
 import { crmService, noteService, authService } from '../../services/api';
+import { supabase } from '../../services/supabaseClient';
 import { geminiService, type StatementOfAdviceResponse } from '../../services/geminiService';
+import { ReadinessScoreWidget } from '../applications/ReadinessScoreWidget';
+import { RiskPredictor } from './RiskPredictor';
+import { AnomalyFlagBanner } from './AnomalyFlagBanner';
+import { FullAdvicePanel } from '../applications/FullAdvicePanel';
+import { useToast } from '../../hooks/useToast';
 
 type ApplicationDetailRow = {
   id: string;
@@ -46,6 +53,9 @@ interface OverviewTabProps {
   client: any;
   onUpdate: () => void;
   onOpenStatementModal?: () => void;
+  advisorId?: string;
+  /** Incremented from parent when notes should reload (e.g. Realtime). */
+  notesRefreshTick?: number;
 }
 
 export const OverviewTab: React.FC<OverviewTabProps> = ({
@@ -53,6 +63,8 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   client,
   onUpdate,
   onOpenStatementModal,
+  advisorId,
+  notesRefreshTick = 0,
 }) => {
   const [detail, setDetail] = useState<ApplicationDetailRow | null>(null);
   const [loading, setLoading] = useState(true);
@@ -62,7 +74,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   const [aiRecommendation, setAiRecommendation] = useState<AIRecommendationResponse | null>(null);
   const [isRecommending, setIsRecommending] = useState(false);
   const [recommendationError, setRecommendationError] = useState<string | null>(null);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toast = useToast();
   const [savingLending, setSavingLending] = useState(false);
 
   const [loanAmountEdit, setLoanAmountEdit] = useState<string>('');
@@ -131,14 +143,6 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   const [titleNumber, setTitleNumber] = useState(application?.title_number || '');
   const [legalDescription, setLegalDescription] = useState(application?.legal_description || '');
 
-  // Toast cleanup
-  useEffect(() => {
-    if (toastMessage) {
-      const t = setTimeout(() => setToastMessage(null), 2500);
-      return () => clearTimeout(t);
-    }
-  }, [toastMessage]);
-
   // Sync loan edit fields from detail
   useEffect(() => {
     if (detail) {
@@ -169,11 +173,14 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           });
         });
 
-        const expensesData = await applicationService.getExpenses(application.id);
-        const totalExpensesMonthly = (expensesData || []).reduce(
-          (sum: number, e: any) => sum + (Number(e.total_monthly) || 0),
-          0
-        );
+        const { data: latestExpense } = await supabase
+          .from('expenses')
+          .select('*')
+          .eq('application_id', application.id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const totalExpensesMonthly = Number(latestExpense?.total_monthly) || 0;
         const totalExpensesAnnual = totalExpensesMonthly * 12;
 
         const assetsData = await applicationService.getAssets(application.id);
@@ -211,7 +218,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           });
         }
       } catch (err) {
-        console.error('Failed to compute financial summary:', err);
+        logger.error('Failed to compute financial summary:', err);
       }
     };
 
@@ -230,7 +237,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     }
   }, [application.id]);
 
-  // Load application notes on mount
+  // Load application notes on mount and when parent signals refresh (Realtime)
   useEffect(() => {
     if (application.id) {
       setApplicationNotesLoading(true);
@@ -240,7 +247,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
         .catch(() => setApplicationNotes([]))
         .finally(() => setApplicationNotesLoading(false));
     }
-  }, [application.id]);
+  }, [application.id, notesRefreshTick]);
 
   // Load application detail on mount
   useEffect(() => {
@@ -257,7 +264,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       })
       .catch((err) => {
         if (!cancelled) {
-          console.error('Failed to load application detail:', err);
+          logger.error('Failed to load application detail:', err);
           setDetail(null);
         }
       })
@@ -323,7 +330,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       );
       setAiRecommendation({ ...result, recommendationId: `rec_${application.id}_${Date.now()}` });
     } catch (err) {
-      console.error(err);
+      logger.error(err);
       setRecommendationError('Failed to generate AI recommendation. Please try again.');
     } finally {
       setIsRecommending(false);
@@ -336,10 +343,12 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     setWorkflowStage(stage);
     try {
       await applicationService.updateWorkflowStage(application.id, stage);
+      const data = await applicationService.getApplicationById(application.id);
+      setDetail(data as ApplicationDetailRow);
       onUpdate();
-      setToastMessage('Workflow stage updated');
+      toast.success('Workflow stage updated');
     } catch (err) {
-      console.error('Failed to update workflow stage:', err);
+      logger.error('Failed to update workflow stage:', err);
       setWorkflowStage(previous);
     }
   };
@@ -387,7 +396,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       setShowAdviceReviewModal(true);
     } catch (err) {
       setAdviceSummaryError(
-        err instanceof Error ? err.message : 'Could not generate summary. Check your Gemini API key is set in .env as VITE_GEMINI_API_KEY'
+        err instanceof Error ? err.message : 'Could not generate summary. Set GEMINI_API_KEY in Supabase Edge Function secrets (gemini-proxy).'
       );
     } finally {
       setAdviceSummaryLoading(false);
@@ -448,10 +457,10 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       author_id: null,
       author_name: authorNameForNote,
     };
-    console.log('[Advice Summary] Notes insert payload:', payload);
+    logger.log('[Advice Summary] Notes insert payload:', payload);
 
     if (!firmId) {
-      setToastMessage('Cannot save: firm ID is missing. Ensure the application is linked to a firm.');
+      toast.error('Cannot save: firm ID is missing. Ensure the application is linked to a firm.');
       return;
     }
 
@@ -463,15 +472,16 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
         firmId,
         authorName: authorNameForNote,
       });
-      setToastMessage('Advice summary saved to application notes');
+      toast.success('Advice summary saved to application notes');
       setShowAdviceReviewModal(false);
       setAdviceReview(null);
       applicationService.getApplicationById(application.id).then((data) => {
         setDetail(data as ApplicationDetailRow);
       });
       noteService.getApplicationNotes(application.id).then(setApplicationNotes);
+      onUpdate();
     } catch (err) {
-      setToastMessage(err instanceof Error ? err.message : 'Failed to save note');
+      toast.error(err instanceof Error ? err.message : 'Failed to save note');
     }
   };
 
@@ -492,7 +502,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       (application as any).client_id ??
       client.id;
     if (!firmId) {
-      setToastMessage('Cannot add note: firm ID is missing.');
+      toast.error('Cannot add note: firm ID is missing.');
       return;
     }
     setAddingNote(true);
@@ -505,11 +515,12 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
         authorName: authService.getCurrentUser()?.name ?? 'Adviser',
       });
       setNewNoteText('');
-      setToastMessage('Note added');
+      toast.success('Note added');
       const notes = await noteService.getApplicationNotes(application.id);
       setApplicationNotes(notes);
+      onUpdate();
     } catch (err) {
-      setToastMessage(err instanceof Error ? err.message : 'Failed to add note');
+      toast.error(err instanceof Error ? err.message : 'Failed to add note');
     } finally {
       setAddingNote(false);
     }
@@ -531,10 +542,10 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       const updated = (await applicationService.getApplicationById(application.id)) as ApplicationDetailRow;
       setDetail(updated);
       onUpdate();
-      setToastMessage('Changes saved');
+      toast.success('Changes saved');
     } catch (err) {
-      console.error('Failed to save lending details:', err);
-      setToastMessage('Failed to save changes');
+      logger.error('Failed to save lending details:', err);
+      toast.error('Failed to save changes');
     } finally {
       setSavingLending(false);
     }
@@ -564,7 +575,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       const results = await res.json();
       setPropertySearchResults(results || []);
     } catch (err) {
-      console.error('Nominatim search error:', err);
+      logger.error('Nominatim search error:', err);
     } finally {
       setPropertySearching(false);
     }
@@ -592,15 +603,19 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
         property_postcode: propertyPostcode,
         property_type: propertyType,
         zoning: zoning,
-        property_value: propertyValue === '' ? null : Number(propertyValue),
-        valuation_type: valuationType,
-        land_area_m2: landArea === '' ? null : Number(landArea),
-        title_number: titleNumber,
-        legal_description: legalDescription,
+      property_value: propertyValue === '' ? null : Number(propertyValue),
+      valuation_type: valuationType,
+      land_area_m2: landArea === '' ? null : Number(landArea),
+      title_number: titleNumber,
+      legal_description: legalDescription,
       });
-      alert('Property details saved');
+      toast.success('Property details saved');
+      const updated = (await applicationService.getApplicationById(application.id)) as ApplicationDetailRow;
+      setDetail(updated);
+      onUpdate();
     } catch (err) {
-      console.error('Save error:', err);
+      logger.error('Save error:', err);
+      toast.error('Failed to save property details');
     }
   };
 
@@ -615,7 +630,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       const data = await res.json();
       setPropSearchResults(data);
     } catch (e) {
-      console.error('Search error:', e);
+      logger.error('Search error:', e);
     } finally {
       setPropSearching(false);
     }
@@ -645,7 +660,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           setPropLegalDesc(props?.legal_description || props?.title_no || '');
         }
       } catch (e) {
-        console.log('LINZ title lookup failed:', e);
+        logger.log('LINZ title lookup failed:', e);
       }
     }
   };
@@ -667,9 +682,13 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
         title_number: propTitleNumber || null,
         legal_description: propLegalDesc || null,
       });
-      alert('Property details saved');
+      toast.success('Property details saved');
+      const updated = (await applicationService.getApplicationById(application.id)) as ApplicationDetailRow;
+      setDetail(updated);
+      onUpdate();
     } catch (e) {
-      console.error('Save error:', e);
+      logger.error('Save error:', e);
+      toast.error('Failed to save property details');
     } finally {
       setPropSaving(false);
     }
@@ -683,8 +702,27 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     );
   }
 
+  const firmId = application.firm_id ?? application.firmId ?? '';
+
   return (
     <>
+      <div className="mb-6">
+        <ReadinessScoreWidget applicationId={application.id} />
+      </div>
+      <div className="mb-6">
+        <RiskPredictor applicationId={application.id} firmId={firmId} />
+      </div>
+      <div className="mb-6">
+        <AnomalyFlagBanner applicationId={application.id} />
+      </div>
+      <div className="mb-6">
+        <FullAdvicePanel
+          applicationId={application.id}
+          firmId={application.firm_id}
+          advisorId={advisorId}
+          onComplete={() => { /* optionally refresh readiness */ }}
+        />
+      </div>
       <div className="space-y-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left: Lending Details */}
@@ -1307,15 +1345,6 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
         </div>
       )}
 
-      {/* Local toast */}
-      {toastMessage && (
-        <div
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-lg text-sm font-medium bg-gray-800 dark:bg-gray-700 text-white border border-gray-600 dark:border-gray-600"
-          role="alert"
-        >
-          {toastMessage}
-        </div>
-      )}
     </>
   );
 };

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { logger } from '../../utils/logger';
 import type { Note, Task } from '../../types';
 import { crmService } from '../../services/api';
 import { Modal } from './Modal';
@@ -33,7 +34,7 @@ export const ConvertToTaskModal: React.FC<ConvertToTaskModalProps> = ({ note, on
       onTaskCreated(newTask);
       onClose();
     } catch (error) {
-      console.error('Failed to create task:', error);
+      logger.error('Failed to create task:', error);
       alert('There was an error creating the task. Please try again.');
       setIsLoading(false);
     }

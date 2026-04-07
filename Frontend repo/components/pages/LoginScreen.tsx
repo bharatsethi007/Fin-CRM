@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { crmService } from '../../services/api';
-import type { Firm, Advisor } from '../../types';
+import type { LoginSuccess } from '../../services/api';
 import { Button } from '../common/Button';
 import { Icon } from '../common/Icon';
 import { Card } from '../common/Card';
 
 interface LoginScreenProps {
-  onLogin: (advisor: Advisor, firm: Firm) => void;
+  onLogin: (result: LoginSuccess) => void;
 }
 
 const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
@@ -23,8 +23,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
     setError(null);
     setResetSent(false);
     try {
-      const { advisor, firm } = await crmService.login(email, password);
-      onLogin(advisor, firm);
+      const result = await crmService.login(email, password);
+      onLogin(result);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Sign in failed.');
       setIsLoading(false);

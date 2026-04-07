@@ -5,7 +5,10 @@
       "Bash(cd \"C:\\\\Users\\\\BharatS\\\\advisorflow\\\\Frontend repo\" && npx tsc --noEmit 2>&1; echo \"Exit: $?\")",
       "Bash(find \"/c/Users/BharatS/advisorflow/Frontend repo/node_modules/react\" -name \"*.d.ts\" 2>/dev/null | head -10)",
       "Bash(find \"/c/Users/BharatS/advisorflow/Frontend repo/node_modules\" -path \"*/react/index.d.ts\" 2>/dev/null; find \"/c/Users/BharatS/advisorflow/Frontend repo/node_modules\" -name \"react.d.ts\" 2>/dev/null | head -5)",
-      "Bash(find \"/c/Users/BharatS/advisorflow/Frontend repo/node_modules\" -name \"*.d.ts\" -path \"*react*\" 2>/dev/null | grep -v \"reduxjs\\\\|fast-deep\" | head -15)"
+      "Bash(find \"/c/Users/BharatS/advisorflow/Frontend repo/node_modules\" -name \"*.d.ts\" -path \"*react*\" 2>/dev/null | grep -v \"reduxjs\\\\|fast-deep\" | head -15)",
+      "Bash(npm list:*)",
+      "Bash(node -e ':*)",
+      "Bash(npm run:*)"
     ]
   }
 }

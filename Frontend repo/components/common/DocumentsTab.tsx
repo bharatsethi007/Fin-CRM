@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { logger } from '../../utils/logger';
 import { createPortal } from 'react-dom';
 import type { Document, DocumentFolder } from '../../types';
 import { DOCUMENT_CATEGORIES } from '../../types';
 import { crmService } from '../../services/api';
+import { useToast } from '../../hooks/useToast';
+import { DocumentsService } from '../../src/services/documents.service';
 import { Icon } from './Icon';
 import { Modal } from './Modal';
 import { Button } from './Button';
@@ -10,7 +13,50 @@ import { Button } from './Button';
 interface DocumentsTabProps {
   clientId: string;
   clientEmail: string;
+  /** Used when a document row has no `applicationId` (e.g. client-level uploads). */
+  defaultApplicationId?: string;
   onDocumentsUpdated?: () => void;
+}
+
+function canAIParseDocument(doc: Document): boolean {
+  const n = doc.name.toLowerCase();
+  const isPdf = n.endsWith('.pdf');
+  const isImg = /\.(png|jpe?g|webp)$/i.test(n);
+  if (!isPdf && !isImg) return false;
+  const cat = doc.category;
+  return (
+    cat === '02 Financial Evidence' ||
+    cat === '01 Fact Find' ||
+    cat === 'Financial'
+  );
+}
+
+function labelForDetectedType(dt: string): string {
+  switch (dt) {
+    case 'bank_statement':
+      return 'Bank Statement';
+    case 'payslip':
+      return 'Payslip';
+    case 'tax_return':
+      return 'Tax Return';
+    case 'accountant_financials':
+      return 'Accountant Financials';
+    case 'unknown':
+      return 'Document';
+    default:
+      return dt ? dt.replace(/_/g, ' ') : 'Document';
+  }
+}
+
+/** True when payslip parsing wrote to the `income` table (not bank-statement analysis). */
+function incomeTabWasPopulated(populatedFields: string[]): boolean {
+  const set = new Set(populatedFields.map((f) => String(f).toLowerCase()));
+  return (
+    set.has('gross_salary') ||
+    set.has('income_type') ||
+    set.has('annual_gross_total') ||
+    set.has('salary_frequency')
+  );
 }
 
 const UNFILED_KEY = '__unfiled__';
@@ -40,7 +86,13 @@ const groupDocumentsByFolder = (docs: Document[], folders: DocumentFolder[]) => 
   return groups;
 };
 
-const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDocumentsUpdated }) => {
+const DocumentsTab: React.FC<DocumentsTabProps> = ({
+  clientId,
+  clientEmail,
+  defaultApplicationId,
+  onDocumentsUpdated,
+}) => {
+  const toast = useToast();
   const [documents, setDocuments] = useState<Document[]>([]);
   const [folders, setFolders] = useState<DocumentFolder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -74,21 +126,38 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDo
   const [uploadToFolderId, setUploadToFolderId] = useState<string | null>(null);
   const [folderMenuPosition, setFolderMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const [fileMenuPosition, setFileMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  const [parsingDocId, setParsingDocId] = useState<string | null>(null);
+  const [parseResult, setParseResult] = useState<{
+    documentId: string;
+    detectedType: string;
+    extractedData: Record<string, unknown>;
+    summary: string;
+    populatedFields: string[];
+  } | null>(null);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [parseSuccess, setParseSuccess] = useState<string | null>(null);
+  const [parseResultData, setParseResultData] = useState<Record<string, unknown> | null>(null);
 
-  const fetchDocuments = useCallback(() => {
+  const fetchDocuments = useCallback(async () => {
     setIsLoading(true);
-    Promise.all([
-      crmService.getDocuments(clientId),
-      crmService.getFolders(clientId),
-    ]).then(([docs, foldersList]) => {
+    try {
+      const [docs, foldersList] = await Promise.all([
+        crmService.getDocuments(clientId),
+        crmService.getFolders(clientId),
+      ]);
       setDocuments(docs);
       setFolders(foldersList);
+    } finally {
       setIsLoading(false);
-    });
+    }
   }, [clientId]);
 
+  const loadDocuments = useCallback(async () => {
+    await fetchDocuments();
+  }, [fetchDocuments]);
+
   useEffect(() => {
-    fetchDocuments();
+    void fetchDocuments();
   }, [fetchDocuments]);
 
   const folderGroups = useMemo(() => groupDocumentsByFolder(documents, folders), [documents, folders]);
@@ -112,6 +181,67 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDo
       else next.add(key);
       return next;
     });
+  };
+
+  const handleAIParse = async (doc: Document) => {
+    const applicationId = doc.applicationId ?? defaultApplicationId;
+    const firmId = doc.firmId;
+    if (!applicationId) {
+      toast.error(
+        'No application linked. Create an application for this client, or link this document to one.',
+      );
+      return;
+    }
+    if (!firmId) {
+      toast.error('Firm context missing.');
+      return;
+    }
+
+    setParsingDocId(doc.id);
+    setParseError(null);
+    setParseSuccess(null);
+    try {
+      const { data, error } = await DocumentsService.parse(doc.id, applicationId, firmId);
+      if (error) throw new Error(error);
+
+      const payload = data as Record<string, unknown> | null;
+      if (payload && typeof payload === 'object' && 'error' in payload && payload.error) throw new Error(String(payload.error));
+
+      if (payload?.success) {
+        setParseSuccess(doc.id);
+        setParseResultData(payload);
+        const rawExtracted = payload.extracted_data ?? payload.extracted;
+        const extractedData =
+          rawExtracted && typeof rawExtracted === 'object' && !Array.isArray(rawExtracted)
+            ? (rawExtracted as Record<string, unknown>)
+            : {};
+        const rawPopulated = payload.populated_fields ?? payload.fields_populated;
+        const populatedFields = Array.isArray(rawPopulated)
+          ? rawPopulated.map((x) => String(x))
+          : [];
+
+        toast.success('✓ ' + String(payload.summary ?? 'Parsed'));
+
+        setParseResult({
+          documentId: doc.id,
+          detectedType: String(payload.detected_type ?? 'unknown'),
+          extractedData,
+          summary: String(payload.summary ?? ''),
+          populatedFields,
+        });
+
+        await loadDocuments();
+        onDocumentsUpdated?.();
+      } else {
+        throw new Error(String(payload?.error ?? 'Parse failed'));
+      }
+    } catch (err: any) {
+      const msg = err?.message || 'Parse failed';
+      setParseError(msg);
+      toast.error(msg);
+    } finally {
+      setParsingDocId(null);
+    }
   };
 
   const handleDragEnter = (e: React.DragEvent) => {
@@ -156,16 +286,30 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDo
     setIsUploading(true);
     try {
       const folderId = uploadToFolderId;
+      const applicationId = defaultApplicationId;
       for (const file of pendingFiles) {
-        await crmService.addDocument(clientId, file, selectedCategory, folderId);
+        const doc = await crmService.addDocument(clientId, file, selectedCategory, folderId);
+
+        if (applicationId && doc?.id && doc.firmId) {
+          const { data: parseData, error: parseErr } = await DocumentsService.parse(
+            doc.id,
+            applicationId,
+            doc.firmId,
+          );
+          if (parseErr) {
+            toast.error(`Uploaded ${file.name}, but parse failed: ${parseErr}`);
+          } else if (parseData && typeof parseData === 'object' && 'success' in parseData && (parseData as { success?: boolean }).success) {
+            toast.success(`✓ ${String((parseData as { summary?: string }).summary || `${file.name} parsed`)}`);
+          }
+        }
       }
       setPendingFiles([]);
       setShowCategoryModal(false);
       setUploadToFolderId(null);
-      fetchDocuments();
+      await loadDocuments();
       onDocumentsUpdated?.();
     } catch (error) {
-      console.error('Upload failed:', error);
+      logger.error('Upload failed:', error);
       alert('Failed to upload documents. Please try again.');
     } finally {
       setIsUploading(false);
@@ -223,9 +367,9 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDo
       await crmService.createFolder(clientId, name);
       setNewFolderName('');
       setShowNewFolderModal(false);
-      fetchDocuments();
+      void loadDocuments();
     } catch (err) {
-      console.error('Failed to create folder:', err);
+      logger.error('Failed to create folder:', err);
       alert('Failed to create folder. Please try again.');
     } finally {
       setIsCreatingFolder(false);
@@ -240,10 +384,10 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDo
       await crmService.moveDocumentsToFolder(Array.from(selectedForShare) as string[], moveTargetFolderId);
       setShowMoveModal(false);
       setSelectedForShare(new Set());
-      fetchDocuments();
+      void loadDocuments();
       onDocumentsUpdated?.();
     } catch (err) {
-      console.error('Failed to move documents:', err);
+      logger.error('Failed to move documents:', err);
       alert('Failed to move documents. Please try again.');
     } finally {
       setIsMoving(false);
@@ -258,9 +402,9 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDo
       await crmService.renameFolder(renameFolderId, name);
       setRenameFolderId(null);
       setRenameFolderName('');
-      fetchDocuments();
+      void loadDocuments();
     } catch (err) {
-      console.error('Failed to rename folder:', err);
+      logger.error('Failed to rename folder:', err);
       alert('Failed to rename folder.');
     }
   };
@@ -271,9 +415,9 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDo
     setFolderMenuPosition(null);
     try {
       await crmService.deleteFolder(folderId);
-      fetchDocuments();
+      void loadDocuments();
     } catch (err) {
-      console.error('Failed to delete folder:', err);
+      logger.error('Failed to delete folder:', err);
       alert('Failed to delete folder.');
     }
   };
@@ -309,9 +453,9 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDo
       await crmService.updateDocument(renameDocId, { name });
       setRenameDocId(null);
       setRenameDocName('');
-      fetchDocuments();
+      void loadDocuments();
     } catch (err) {
-      console.error('Failed to rename document:', err);
+      logger.error('Failed to rename document:', err);
       alert('Failed to rename document.');
     }
   };
@@ -321,9 +465,9 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDo
     setFileMenuOpen(null);
     try {
       await crmService.deleteDocument(docId);
-      fetchDocuments();
+      void loadDocuments();
     } catch (err) {
-      console.error('Failed to delete document:', err);
+      logger.error('Failed to delete document:', err);
       alert('Failed to delete document.');
     }
   };
@@ -334,9 +478,9 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDo
       await crmService.updateDocument(changeCategoryDocId, { category: changeCategoryValue });
       setChangeCategoryDocId(null);
       setChangeCategoryValue('');
-      fetchDocuments();
+      void loadDocuments();
     } catch (err) {
-      console.error('Failed to update category:', err);
+      logger.error('Failed to update category:', err);
       alert('Failed to update category.');
     }
   };
@@ -382,12 +526,17 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDo
           <input
             type="file"
             multiple
-            accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif,image/*"
+            accept=".pdf,.doc,.docx,.csv,.xls,.xlsx,.jpg,.jpeg,.png,.gif,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/*"
             onChange={handleFileSelect}
             className="hidden"
           />
         </label>
       </div>
+      {parseError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300">
+          Parse error: {parseError}
+        </div>
+      )}
 
       <div>
         <div className="flex items-center justify-between mb-3">
@@ -538,111 +687,198 @@ const DocumentsTab: React.FC<DocumentsTabProps> = ({ clientId, clientEmail, onDo
                               {categoryDocs.map(doc => {
                         const isDocRenaming = renameDocId === doc.id;
                         const isDocChangingCategory = changeCategoryDocId === doc.id;
+                        const showParseResult = parseResult?.documentId === doc.id;
+                        const extractedForRow = parseResult?.extractedData;
+                        const incomeDisplay =
+                          extractedForRow &&
+                          (extractedForRow.gross_salary ??
+                            extractedForRow.gross ??
+                            extractedForRow.average_monthly_credits ??
+                            extractedForRow.total_credits);
+                        const bankDisplay =
+                          extractedForRow &&
+                          (extractedForRow.bank_name ?? extractedForRow.employer_name);
+                        const periodStart =
+                          extractedForRow &&
+                          (extractedForRow.statement_period_start ??
+                            extractedForRow.pay_period_start);
+                        const periodEnd =
+                          extractedForRow &&
+                          (extractedForRow.statement_period_end ?? extractedForRow.pay_period_end);
+                        const periodDisplay =
+                          periodStart && periodEnd
+                            ? `${String(periodStart)} → ${String(periodEnd)}`
+                            : periodStart
+                              ? String(periodStart)
+                              : periodEnd
+                                ? String(periodEnd)
+                                : null;
+
                         return (
                           <li
                             key={doc.id}
-                            className="flex items-center justify-between p-3 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                            className="flex flex-col bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700/50"
                           >
-                            <input
-                              type="checkbox"
-                              checked={selectedForShare.has(doc.id)}
-                              onChange={e => { e.stopPropagation(); toggleSelectForShare(doc.id); }}
-                              onClick={e => e.stopPropagation()}
-                              className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
-                            />
-                            <div
-                              className="flex items-center gap-2 min-w-0 flex-1 cursor-pointer"
-                              onClick={() => !isDocRenaming && !isDocChangingCategory && openViewer(doc)}
-                            >
-                              <Icon name="FileText" className="h-5 w-5 text-gray-400 flex-shrink-0" />
-                              <div className="min-w-0 flex items-center gap-2 flex-wrap">
-                                {isDocRenaming ? (
-                                  <input
-                                    type="text"
-                                    value={renameDocName}
-                                    onChange={e => setRenameDocName(e.target.value)}
-                                    onKeyDown={e => {
-                                      if (e.key === 'Enter') handleRenameDoc();
-                                      if (e.key === 'Escape') { setRenameDocId(null); setRenameDocName(''); }
-                                    }}
-                                    onClick={e => e.stopPropagation()}
-                                    className="flex-1 min-w-[120px] px-2 py-1 text-sm border rounded dark:bg-gray-700 dark:border-gray-600"
-                                    autoFocus
-                                  />
-                                ) : (
-                                  <p className="font-medium text-sm truncate">{doc.name}</p>
-                                )}
-                                {isDocRenaming && (
-                                  <div className="flex gap-1 flex-shrink-0">
-                                    <button type="button" onClick={e => { e.stopPropagation(); handleRenameDoc(); }} className="text-xs text-primary-600 hover:underline">Save</button>
-                                    <button type="button" onClick={e => { e.stopPropagation(); setRenameDocId(null); setRenameDocName(''); }} className="text-xs text-gray-500 hover:underline">Cancel</button>
-                                  </div>
-                                )}
-                              </div>
-                              <p className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0 ml-1">{formatTimestamp(doc.createdAt)}</p>
-                            </div>
-                            <div className="flex items-center gap-1 flex-shrink-0">
-                              <button
-                                type="button"
-                                onClick={e => { e.stopPropagation(); openShareModal([doc]); }}
-                                className="p-2 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-500 hover:text-primary-600 dark:hover:text-primary-400"
-                                title="Share"
-                              >
-                                <Icon name="Share2" className="h-4 w-4" />
-                              </button>
-                              <a
-                                href={doc.url}
-                                download={doc.name}
+                            <div className="flex items-center justify-between p-3">
+                              <input
+                                type="checkbox"
+                                checked={selectedForShare.has(doc.id)}
+                                onChange={e => { e.stopPropagation(); toggleSelectForShare(doc.id); }}
                                 onClick={e => e.stopPropagation()}
-                                className="p-2 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-500 hover:text-primary-600 dark:hover:text-primary-400"
-                                title="Download"
+                                className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
+                              />
+                              <div
+                                className="flex items-center gap-2 min-w-0 flex-1 cursor-pointer"
+                                onClick={() => !isDocRenaming && !isDocChangingCategory && openViewer(doc)}
                               >
-                                <Icon name="Download" className="h-4 w-4" />
-                              </a>
-                              <div className="relative">
+                                <Icon name="FileText" className="h-5 w-5 text-gray-400 flex-shrink-0" />
+                                <div className="min-w-0 flex items-center gap-2 flex-wrap">
+                                  {isDocRenaming ? (
+                                    <input
+                                      type="text"
+                                      value={renameDocName}
+                                      onChange={e => setRenameDocName(e.target.value)}
+                                      onKeyDown={e => {
+                                        if (e.key === 'Enter') handleRenameDoc();
+                                        if (e.key === 'Escape') { setRenameDocId(null); setRenameDocName(''); }
+                                      }}
+                                      onClick={e => e.stopPropagation()}
+                                      className="flex-1 min-w-[120px] px-2 py-1 text-sm border rounded dark:bg-gray-700 dark:border-gray-600"
+                                      autoFocus
+                                    />
+                                  ) : (
+                                    <p className="font-medium text-sm truncate">{doc.name}</p>
+                                  )}
+                                  {isDocRenaming && (
+                                    <div className="flex gap-1 flex-shrink-0">
+                                      <button type="button" onClick={e => { e.stopPropagation(); handleRenameDoc(); }} className="text-xs text-primary-600 hover:underline">Save</button>
+                                      <button type="button" onClick={e => { e.stopPropagation(); setRenameDocId(null); setRenameDocName(''); }} className="text-xs text-gray-500 hover:underline">Cancel</button>
+                                    </div>
+                                  )}
+                                </div>
+                                <p className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0 ml-1">{formatTimestamp(doc.createdAt)}</p>
+                              </div>
+                              <div className="flex items-center gap-1 flex-shrink-0">
                                 <button
                                   type="button"
-                                  onClick={e => {
-                                    e.stopPropagation();
-                                    const btn = e.currentTarget;
-                                    if (fileMenuOpen === doc.id) {
-                                      setFileMenuOpen(null);
-                                      setFileMenuPosition(null);
-                                    } else {
-                                      const rect = btn.getBoundingClientRect();
-                                      setFileMenuPosition({ top: rect.bottom + 4, left: Math.max(8, rect.right - 192) });
-                                      setFileMenuOpen(doc.id);
-                                    }
-                                    setFolderMenuOpen(null);
-                                  }}
-                                  className="p-2 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-500"
-                                  title="More options"
+                                  onClick={e => { e.stopPropagation(); openShareModal([doc]); }}
+                                  className="p-2 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-500 hover:text-primary-600 dark:hover:text-primary-400"
+                                  title="Share"
                                 >
-                                  <Icon name="MoreVertical" className="h-4 w-4" />
+                                  <Icon name="Share2" className="h-4 w-4" />
                                 </button>
-                                {fileMenuOpen === doc.id && fileMenuPosition &&
-                                  createPortal(
-                                    <>
-                                      <div className="fixed inset-0 z-10" onClick={() => { setFileMenuOpen(null); setFileMenuPosition(null); }} aria-hidden="true" />
-                                      <div
-                                        className="fixed z-20 w-48 py-1 bg-white dark:bg-gray-800 border dark:border-gray-600 rounded-lg shadow-lg"
-                                        style={{ top: fileMenuPosition.top, left: fileMenuPosition.left }}
-                                      >
-                                        <button type="button" onClick={e => { e.stopPropagation(); setRenameDocName(doc.name); setRenameDocId(doc.id); setFileMenuOpen(null); setFileMenuPosition(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-100 dark:hover:bg-gray-700">
-                                          <Icon name="Pencil" className="h-4 w-4" /> Rename
-                                        </button>
-                                        <button type="button" onClick={e => { e.stopPropagation(); setChangeCategoryDocId(doc.id); setChangeCategoryValue(doc.category); setFileMenuOpen(null); setFileMenuPosition(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-100 dark:hover:bg-gray-700">
-                                          <Icon name="Filter" className="h-4 w-4" /> Change category
-                                        </button>
-                                        <button type="button" onClick={e => { e.stopPropagation(); handleDeleteDoc(doc.id); setFileMenuOpen(null); setFileMenuPosition(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
-                                          <Icon name="Trash2" className="h-4 w-4" /> Delete
-                                        </button>
-                                      </div>
-                                    </>,
-                                    document.body
-                                  )}
+                                {canAIParseDocument(doc) && doc.parseStatus !== 'parsed' && (
+                                  <button
+                                    type="button"
+                                    onClick={e => { e.stopPropagation(); void handleAIParse(doc); }}
+                                    disabled={parsingDocId === doc.id}
+                                    className="px-2 py-1.5 text-xs font-semibold rounded-md border border-violet-200 dark:border-violet-700 bg-violet-50 dark:bg-violet-950/40 text-violet-700 dark:text-violet-300 hover:bg-violet-100 dark:hover:bg-violet-900/50 disabled:opacity-50 whitespace-nowrap"
+                                    title="Parse with AI"
+                                  >
+                                    {parsingDocId === doc.id ? 'Parsing…' : 'AI Parse'}
+                                  </button>
+                                )}
+                                {parseSuccess === doc.id && parseResultData?.success && (
+                                  <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">✓ Parsed</span>
+                                )}
+                                <a
+                                  href={doc.url}
+                                  download={doc.name}
+                                  onClick={e => e.stopPropagation()}
+                                  className="p-2 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-500 hover:text-primary-600 dark:hover:text-primary-400"
+                                  title="Download"
+                                >
+                                  <Icon name="Download" className="h-4 w-4" />
+                                </a>
+                                <div className="relative">
+                                  <button
+                                    type="button"
+                                    onClick={e => {
+                                      e.stopPropagation();
+                                      const btn = e.currentTarget;
+                                      if (fileMenuOpen === doc.id) {
+                                        setFileMenuOpen(null);
+                                        setFileMenuPosition(null);
+                                      } else {
+                                        const rect = btn.getBoundingClientRect();
+                                        setFileMenuPosition({ top: rect.bottom + 4, left: Math.max(8, rect.right - 192) });
+                                        setFileMenuOpen(doc.id);
+                                      }
+                                      setFolderMenuOpen(null);
+                                    }}
+                                    className="p-2 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-500"
+                                    title="More options"
+                                  >
+                                    <Icon name="MoreVertical" className="h-4 w-4" />
+                                  </button>
+                                  {fileMenuOpen === doc.id && fileMenuPosition &&
+                                    createPortal(
+                                      <>
+                                        <div className="fixed inset-0 z-10" onClick={() => { setFileMenuOpen(null); setFileMenuPosition(null); }} aria-hidden="true" />
+                                        <div
+                                          className="fixed z-20 w-48 py-1 bg-white dark:bg-gray-800 border dark:border-gray-600 rounded-lg shadow-lg"
+                                          style={{ top: fileMenuPosition.top, left: fileMenuPosition.left }}
+                                        >
+                                          <button type="button" onClick={e => { e.stopPropagation(); setRenameDocName(doc.name); setRenameDocId(doc.id); setFileMenuOpen(null); setFileMenuPosition(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-100 dark:hover:bg-gray-700">
+                                            <Icon name="Pencil" className="h-4 w-4" /> Rename
+                                          </button>
+                                          <button type="button" onClick={e => { e.stopPropagation(); setChangeCategoryDocId(doc.id); setChangeCategoryValue(doc.category); setFileMenuOpen(null); setFileMenuPosition(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-100 dark:hover:bg-gray-700">
+                                            <Icon name="Filter" className="h-4 w-4" /> Change category
+                                          </button>
+                                          <button type="button" onClick={e => { e.stopPropagation(); handleDeleteDoc(doc.id); setFileMenuOpen(null); setFileMenuPosition(null); }} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
+                                            <Icon name="Trash2" className="h-4 w-4" /> Delete
+                                          </button>
+                                        </div>
+                                      </>,
+                                      document.body
+                                    )}
+                                </div>
                               </div>
                             </div>
+                            {showParseResult && parseResult && (
+                              <div className="px-3 pb-3 pt-0 border-t border-gray-200 dark:border-gray-600 bg-violet-50/40 dark:bg-violet-950/25">
+                                <div className="flex flex-wrap items-start gap-2 justify-between pt-2">
+                                  <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold bg-violet-200/80 text-violet-900 dark:bg-violet-800/80 dark:text-violet-100">
+                                    {labelForDetectedType(parseResult.detectedType)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setParseResult(null)}
+                                    className="text-xs font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
+                                  >
+                                    Dismiss
+                                  </button>
+                                </div>
+                                {parseResult.summary && (
+                                  <p className="mt-1.5 text-xs text-gray-600 dark:text-gray-400">{parseResult.summary}</p>
+                                )}
+                                <dl className="mt-2 grid gap-1.5 text-sm text-gray-800 dark:text-gray-200">
+                                  {incomeDisplay != null && String(incomeDisplay) !== '' && (
+                                    <div className="flex gap-2">
+                                      <dt className="text-gray-500 dark:text-gray-400 shrink-0">Income / credits</dt>
+                                      <dd className="font-medium">{String(incomeDisplay)}</dd>
+                                    </div>
+                                  )}
+                                  {bankDisplay != null && String(bankDisplay) !== '' && (
+                                    <div className="flex gap-2">
+                                      <dt className="text-gray-500 dark:text-gray-400 shrink-0">Bank / employer</dt>
+                                      <dd className="font-medium">{String(bankDisplay)}</dd>
+                                    </div>
+                                  )}
+                                  {periodDisplay && (
+                                    <div className="flex gap-2">
+                                      <dt className="text-gray-500 dark:text-gray-400 shrink-0">Period</dt>
+                                      <dd className="font-medium">{periodDisplay}</dd>
+                                    </div>
+                                  )}
+                                </dl>
+                                {incomeTabWasPopulated(parseResult.populatedFields) && (
+                                  <p className="mt-2 text-sm font-medium text-emerald-700 dark:text-emerald-400">
+                                    ✓ Income tab populated
+                                  </p>
+                                )}
+                              </div>
+                            )}
                           </li>
                         );
                       })}

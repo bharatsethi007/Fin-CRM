@@ -1,5 +1,6 @@
 
 import React, { useState } from 'react';
+import { logger } from '../../utils/logger';
 import type { Client, Lead, Task, Note } from '../../types';
 import { crmService } from '../../services/api';
 import { Button } from '../common/Button';
@@ -79,7 +80,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ record, note, onSave, on
             onSave();
 
         } catch (error: unknown) {
-            console.error("Failed to save note/task:", error);
+            logger.error("Failed to save note/task:", error);
             alert(error instanceof Error ? error.message : "An error occurred. Please try again.");
         } finally {
             setIsSaving(false);

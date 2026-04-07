@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { logger } from '../../utils/logger';
 import type { CallTranscript, Client, Lead } from '../../types';
 import { crmService } from '../../services/api';
 import { Modal } from './Modal';
@@ -48,7 +49,7 @@ export const CallDetailModal: React.FC<CallDetailModalProps> = ({ call, onClose,
             onUpdate();
             onClose();
         } catch (error) {
-            console.error("Failed to update call:", error);
+            logger.error("Failed to update call:", error);
             alert("Could not update call details.");
         } finally {
             setIsSaving(false);

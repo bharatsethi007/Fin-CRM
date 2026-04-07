@@ -1,4 +1,5 @@
 import type { Note, AuditTrailEntry, CallTranscript } from '../../types';
+import { logger } from '../../utils/logger';
 import { supabase } from '../supabaseClient';
 import { authService } from './authService';
 import { MOCK_NOTES, MOCK_AUDIT_TRAIL, MOCK_CALL_TRANSCRIPTS } from './mockData';
@@ -33,7 +34,7 @@ export const noteService = {
         createdAt: n.created_at,
       }));
     } catch (err) {
-      console.error('Failed to load notes:', err);
+      logger.error('Failed to load notes:', err);
       return [];
     }
   },
@@ -90,7 +91,7 @@ export const noteService = {
       author_name: authorName,
       author_avatar_url: currentUser?.avatarUrl ?? null,
     };
-    console.log('[noteService.createNote] Insert payload (notes table):', {
+    logger.log('[noteService.createNote] Insert payload (notes table):', {
       firm_id: insertPayload.firm_id,
       client_id: insertPayload.client_id,
       application_id: insertPayload.application_id,
@@ -134,7 +135,7 @@ export const noteService = {
       .eq('firm_id', currentFirm.id);
 
     if (error) {
-      console.error('Failed to update note:', error);
+      logger.error('Failed to update note:', error);
       throw new Error(error.message);
     }
   },
@@ -160,7 +161,7 @@ export const noteService = {
       .eq('firm_id', currentFirm.id);
 
     if (error) {
-      console.error('Failed to delete note:', error);
+      logger.error('Failed to delete note:', error);
       throw new Error(error.message);
     }
   },

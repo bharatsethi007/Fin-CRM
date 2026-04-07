@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
+import { logger } from '../../utils/logger';
 import { crmService } from '../../services/api';
 import type { Client, CallTranscript, Lead } from '../../types';
 import { Button } from '../common/Button';
@@ -27,7 +28,7 @@ const CallsPage: React.FC = () => {
             setCalls(callsData);
             setClientsAndLeads([...clientsData, ...leadsData]);
         } catch (err) {
-            console.error("Failed to fetch call data:", err);
+            logger.error("Failed to fetch call data:", err);
         } finally {
             setIsLoading(false);
         }
@@ -50,7 +51,7 @@ const CallsPage: React.FC = () => {
             });
             await fetchData();
         } catch (error) {
-            console.error("Failed to process call transcript:", error);
+            logger.error("Failed to process call transcript:", error);
             alert("There was an error processing the call transcript.");
         } finally {
             setIsProcessingCall(false);

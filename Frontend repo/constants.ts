@@ -24,6 +24,7 @@ export const SIDEBAR_NAV_ITEMS: NavSection[] = [
   {
     type: 'main',
     items: [
+      { id: 'flow-intelligence', name: 'Flow Intelligence', icon: 'Sparkles', view: 'flow-intelligence' },
       { id: 'dashboard', name: 'Dashboard', icon: 'LayoutDashboard', view: 'dashboard' },
     ],
   },
@@ -39,17 +40,22 @@ export const SIDEBAR_NAV_ITEMS: NavSection[] = [
       { id: 'clients', name: 'Clients', icon: 'Users', view: 'clients' },
       { id: 'leads', name: 'Leads', icon: 'Users', view: 'leads' },
       { id: 'deals', name: 'Deals', icon: 'DollarSign', view: 'applications' },
+      { id: 'trail-book', name: 'Trail Book', icon: 'BookOpen', view: 'trail-book' },
+      { id: 'commission', name: 'Commission', icon: 'CircleDollarSign', view: 'commission' },
+      { id: 'rates', name: 'Rates', icon: 'TrendingUp', view: 'rates' },
+      { id: 'settings', name: 'Settings', icon: 'Settings', view: 'settings' },
     ],
   },
 ];
 
 
+/** Kanban columns — Closed-Won is not shown; leads convert via detail panel and leave the board. */
 export const LEAD_STATUS_COLUMNS: LeadStatus[] = [
     LeadStatus.New,
     LeadStatus.Contacted,
     LeadStatus.MeetingScheduled,
     LeadStatus.ApplicationStarted,
-    LeadStatus.ClosedWon
+    LeadStatus.ClosedLost,
 ];
 
 export const APPLICATION_STATUS_COLUMNS: ApplicationStatus[] = [

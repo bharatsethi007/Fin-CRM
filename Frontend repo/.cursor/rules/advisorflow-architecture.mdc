@@ -1,0 +1,133 @@
+---
+description: AdvisorFlow architecture rules — enforced on every file edit and generation
+globs: ["**/*.ts", "**/*.tsx"]
+alwaysApply: true
+---
+
+# AdvisorFlow — Architecture Rules
+
+You are working on AdvisorFlow, a multi-tenant mortgage broker CRM SaaS for New Zealand.
+These rules are non-negotiable. Violating any of them causes production failures.
+
+## 1. File Size — Hard Limit
+
+- **No component file ever exceeds 300 lines.** No exceptions.
+- When a file approaches 200 lines, plan the split immediately.
+- Large components must be split into:
+  - Hook file: `useXxx.ts` (state + logic)
+  - Sub-components in a subfolder: `ComponentName/SubPart.tsx`
+  - Shared types: `types.ts`
+- `ApplicationDetailPage.tsx` hit 5,000+ lines and caused LLM editing failures. This must never recur.
+- **Before creating any new component**, state which files will be created and their estimated line counts.
+
+## 2. File Writing — Terminal Only for Large Files
+
+- All files over 150 lines MUST be written via terminal copy command (`cp`, redirect, or `cat << 'EOF'`).
+- Never paste large files into the Cursor editor — encoding corrupts arrow functions at column 170+.
+- After writing via terminal, verify the file compiles: `npx tsc --noEmit path/to/file.tsx`
+
+## 3. Supabase — Critical Patterns
+
+### Never use `.rpc()` for data fetching
+- `SECURITY DEFINER` + `STABLE` RPCs return null from the frontend.
+- Always use direct `.from('table').select()` queries instead.
+
+### Never use `supabase.functions.invoke()`
+- It is unreliable. Use direct `fetch()` to the Edge Function URL instead.
+- Pattern:
+  ```typescript
+  const response = await fetch(
+    `https://lfhaaqjinpbkozaoblyo.supabase.co/functions/v1/function-name`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify(payload),
+    }
+  );
+  ```
+
+### Edge Functions with `verify_jwt: false`
+- Must include BOTH `apikey` AND `Authorization: Bearer ${ANON_KEY}` headers.
+- Missing either one causes silent 401 failures.
+
+### Never use Supabase Realtime
+- Realtime subscriptions crash the app at free-tier connection limits.
+- All Realtime code has been removed. Use `useAutoRefresh` polling hook instead (10–30 second intervals, pauses when tab hidden).
+- Never add `.on('postgres_changes', ...)` or `supabase.channel()` calls.
+
+## 4. Multi-Tenant Security
+
+- Every query MUST filter by `firm_id` via RLS or explicit WHERE clause.
+- Never trust client-side `firm_id` — always derive from `auth.uid()` via `get_my_firm_id()`.
+- Storage paths follow: `{firm_id}/{application_id}/{filename}`.
+- When creating new tables, always include `firm_id uuid REFERENCES firms(id)` and add an RLS policy using `get_my_firm_id()`.
+
+## 5. AI Integration Rules
+
+- All AI calls go through Supabase Edge Functions — never call OpenAI from the browser.
+- Never expose `VITE_OPENAI_API_KEY` or any API key in frontend code.
+- All AI outputs must be logged to `ai_outputs` table for audit trail.
+- PII must be stripped before any AI API call using the `sanitiseForAI` pattern.
+- GPT-4o for legal/compliance documents. GPT-4o-mini for everything else.
+- NZ compliance rules (CCCFA/FMA/FAA/FMC Act 2013) must be referenced in every compliance-related prompt.
+
+## 6. Component Patterns
+
+### Folder structure
+```
+components/
+├── module-name/
+│   ├── ModulePage.tsx           ← shell only, <100 lines
+│   ├── tabs/                    ← tab components
+│   ├── sections/                ← reusable sections
+│   ├── modals/                  ← modal dialogs
+│   └── hooks/                   ← module-specific hooks
+```
+
+### State management
+- Module-level state lives in custom hooks: `useModuleName.ts`
+- Shared data fetching uses hooks in the top-level `hooks/` directory
+- No prop drilling beyond 2 levels — extract to context or hook instead
+
+### Imports
+- Use absolute imports from `components/`, `hooks/`, `types/`, `services/`
+- Never use relative imports that go up more than one level (`../../` is the max)
+
+## 7. TypeScript Strictness
+
+- No `any` types. Use `unknown` and narrow, or define a proper interface.
+- All component props must have an explicit interface, not inline types.
+- All Supabase query results must be typed against the table schema.
+
+## 8. Error Handling
+
+- Every `fetch()` and Supabase call must have try/catch.
+- User-facing errors must use toast notifications, not console.log.
+- AI failures must fail gracefully — show "AI unavailable" not a blank screen.
+
+## 9. Windows Environment
+
+- This is a Windows + PowerShell environment. No `grep`, no `find`, no bash-isms.
+- Use PowerShell equivalents:
+  ```powershell
+  Get-ChildItem -Path "..." -Recurse -Include "*.tsx","*.ts" | Select-String -Pattern "..."
+  ```
+- Dev server: `npm run dev` from Frontend repo folder, port 5173.
+- Kill port conflicts: `taskkill /F /IM node.exe`
+
+## 10. Before Submitting Any Code
+
+Checklist:
+- [ ] No file exceeds 300 lines
+- [ ] No `.rpc()` calls for data fetching
+- [ ] No `supabase.functions.invoke()`
+- [ ] No Realtime subscriptions
+- [ ] No exposed API keys in frontend
+- [ ] All new tables have `firm_id` + RLS policy
+- [ ] AI calls go through Edge Functions
+- [ ] Try/catch on all async operations
+- [ ] Types defined — no `any`

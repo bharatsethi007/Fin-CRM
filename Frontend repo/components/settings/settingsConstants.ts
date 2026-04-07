@@ -4,6 +4,8 @@ interface SettingsNavItem {
     id: string;
     name: string;
     icon: IconName;
+    /** Optional logical group label (e.g. matches sidebar section) */
+    group?: string;
 }
 
 interface SettingsNavGroup {
@@ -22,7 +24,12 @@ export const SETTINGS_NAV_ITEMS: SettingsNavGroup[] = [
             { id: 'storage', name: 'Storage accounts', icon: 'Database' },
             { id: 'refer', name: 'Refer another team', icon: 'UserPlus' },
             { id: 'notifications', name: 'Notifications', icon: 'Bell' },
+            { id: 'licence', name: 'Licence and Regulatory', icon: 'ShieldCheck' },
         ],
+    },
+    {
+        title: 'Operations',
+        items: [{ id: 'task-automation', name: 'Task Automation', icon: 'Zap' }],
     },
     {
         title: 'Workspace',
@@ -42,6 +49,7 @@ export const SETTINGS_NAV_ITEMS: SettingsNavGroup[] = [
         title: 'Security',
         items: [
             { id: 'security', name: 'Security', icon: 'ShieldCheck' },
+            { id: 'mfa', name: 'Two-Factor Authentication', icon: 'ShieldCheck' },
             { id: 'email-calendar-security', name: 'Email and calendar', icon: 'Calendar' },
             { id: 'expert-access', name: 'Expert access grants', icon: 'KeyRound' },
         ],
@@ -51,5 +59,16 @@ export const SETTINGS_NAV_ITEMS: SettingsNavGroup[] = [
         items: [
             { id: 'disclosure-statement', name: 'Disclosure Statement', icon: 'ShieldCheck' },
         ],
+    },
+    {
+        title: 'Firm',
+        items: [
+            { id: 'firm-profile', name: 'Firm Profile', icon: 'Building2' },
+            { id: 'branding', name: 'Branding', icon: 'Paintbrush' },
+        ],
+    },
+    {
+        title: 'AI',
+        items: [{ id: 'ai-skills', name: 'AI Skills & Style', icon: 'Sparkles', group: 'AI' }],
     },
 ];

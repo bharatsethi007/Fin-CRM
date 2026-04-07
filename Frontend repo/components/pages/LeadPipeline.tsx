@@ -1,226 +1,599 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { logger } from '../../utils/logger';
 import { crmService } from '../../services/api';
-import type { Lead } from '../../types';
+import type { Advisor, Lead, LeadActivityEntry } from '../../types';
 import { LeadStatus } from '../../types';
 import { LEAD_STATUS_COLUMNS } from '../../constants';
-import { Card } from '../common/Card';
 import { Icon } from '../common/Icon';
 import { Button } from '../common/Button';
+import {
+  AffordabilityCalculatorStandaloneModal,
+  leadToAffordabilityDefaults,
+  useAffordabilityCalculator,
+} from '../common/AffordabilityCalculator';
+import { useToast } from '../../hooks/useToast';
+import { LeadDetailDrawer } from './LeadDetailDrawer';
 
-const LeadCard: React.FC<{ lead: Lead }> = ({ lead }) => {
-    const probability = lead.conversionProbability || 0;
-    const getBarColor = (p: number) => {
-        if (p > 0.7) return 'bg-green-500';
-        if (p > 0.4) return 'bg-yellow-500';
-        return 'bg-red-500';
-    };
+function followUpOverdue(isoDate: string | undefined): boolean {
+  if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return false;
+  const d = new Date(isoDate + 'T12:00:00');
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  d.setHours(0, 0, 0, 0);
+  return d < today;
+}
 
-    return (
-        <div className="p-3 mb-3 bg-gray-100 dark:bg-gray-700 rounded-md shadow-sm">
-            <div className="flex items-center justify-between mb-2">
-                <p className="font-semibold text-sm">{lead.name}</p>
-                <img src={lead.avatarUrl} alt={lead.name} className="h-6 w-6 rounded-full" />
-            </div>
-            <p className="text-xs text-gray-500 dark:text-gray-400">{lead.email}</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-              Loan: ${lead.estimatedLoanAmount.toLocaleString()}
-            </p>
-            <div className="mt-3">
-                <div className="flex justify-between items-center mb-1">
-                    <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Conversion Probability</span>
-                    <span className={`text-xs font-bold ${getBarColor(probability).replace('bg-', 'text-')}`}>
-                        {(probability * 100).toFixed(0)}%
-                    </span>
-                </div>
-                <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-1.5">
-                    <div className={`${getBarColor(probability)} h-1.5 rounded-full`} style={{ width: `${probability * 100}%` }}></div>
-                </div>
-            </div>
-        </div>
-    );
+const LeadCard: React.FC<{
+  lead: Lead;
+  advisors: Advisor[];
+  onOpenDetail: (lead: Lead) => void;
+  onDragHandleStart: (e: React.DragEvent, lead: Lead) => void;
+  onDragEnd: () => void;
+  isDragging?: boolean;
+}> = ({ lead, advisors, onOpenDetail, onDragHandleStart, onDragEnd, isDragging }) => {
+  const broker = advisors.find((a) => a.id === lead.assignedAdvisorId);
+  const fuOver = followUpOverdue(lead.nextFollowUpDate);
+
+  return (
+    <div
+      className={`flex gap-1.5 p-2 mb-3 rounded-md shadow-sm transition-colors border ${
+        isDragging ? 'opacity-50' : ''
+      } bg-gray-100 dark:bg-gray-700 border-transparent hover:bg-gray-200 dark:hover:bg-gray-600`}
+      style={{ borderColor: isDragging ? 'var(--accent)' : undefined }}
+    >
+      <button
+        type="button"
+        draggable
+        onDragStart={(e) => onDragHandleStart(e, lead)}
+        onDragEnd={onDragEnd}
+        className="shrink-0 w-7 flex items-start justify-center pt-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-grab active:cursor-grabbing border-0 bg-transparent p-0"
+        aria-label="Drag to move lead"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Icon name="GripVertical" className="h-4 w-4" />
+      </button>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => onOpenDetail(lead)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onOpenDetail(lead);
+          }
+        }}
+        className="flex-1 min-w-0 cursor-pointer text-left"
+      >
+        <p className="font-semibold text-sm text-gray-900 dark:text-gray-100 m-0">{lead.name}</p>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 break-all m-0">{lead.email}</p>
+        {lead.phone ? (
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 m-0">{lead.phone}</p>
+        ) : null}
+        <span
+          className="inline-block mt-1.5 text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded"
+          style={{ background: 'var(--bg-primary)', color: 'var(--text-secondary)' }}
+        >
+          {lead.source}
+        </span>
+        <p className="text-sm font-semibold text-gray-800 dark:text-gray-200 mt-2 m-0">
+          Est. loan: ${lead.estimatedLoanAmount.toLocaleString('en-NZ')}
+        </p>
+        {lead.nextFollowUpDate ? (
+          <p
+            className={`text-xs mt-1 m-0 font-medium ${fuOver ? 'text-orange-600 dark:text-orange-400' : 'text-gray-500 dark:text-gray-400'}`}
+          >
+            Follow-up: {lead.nextFollowUpDate}
+            {fuOver ? ' (overdue)' : ''}
+          </p>
+        ) : null}
+        {broker ? (
+          <div className="flex items-center gap-1.5 mt-2">
+            <img
+              src={broker.avatarUrl}
+              alt=""
+              className="w-6 h-6 rounded-full object-cover shrink-0"
+            />
+            <span className="text-xs text-gray-600 dark:text-gray-300 truncate">{broker.name}</span>
+          </div>
+        ) : (
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-2 m-0">Unassigned</p>
+        )}
+        {lead.status === LeadStatus.ClosedLost && lead.lostReason ? (
+          <p className="text-xs text-amber-800 dark:text-amber-200 mt-2 p-2 rounded bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 m-0">
+            {lead.lostReason}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
 };
 
-const LeadPipeline: React.FC = () => {
+type LeadPipelineProps = {
+  navigateToApplication: (applicationId: string) => void;
+  navigateToClient: (clientId: string) => void;
+};
+
+const LostReasonDialog: React.FC<{
+  lead: Lead;
+  reason: string;
+  setReason: (v: string) => void;
+  saving: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}> = ({ lead, reason, setReason, saving, onConfirm, onCancel }) => (
+  <div
+    className="fixed inset-0 z-[110] flex items-center justify-center p-4"
+    style={{ background: 'rgba(0,0,0,0.5)' }}
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="lost-reason-title"
+    onClick={(e) => e.target === e.currentTarget && !saving && onCancel()}
+  >
+    <div
+      className="w-full max-w-md rounded-xl shadow-xl p-5 border"
+      style={{ background: 'var(--bg-card)', borderColor: 'var(--border-color)' }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <h3 id="lost-reason-title" className="text-lg font-bold m-0" style={{ color: 'var(--text-primary)' }}>
+        Mark as lost
+      </h3>
+      <p className="text-sm mt-2" style={{ color: 'var(--text-secondary)' }}>
+        Why is <strong>{lead.name}</strong> closed lost? This is saved on the record.
+      </p>
+      <textarea
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        className="w-full mt-3 px-3 py-2 rounded-md border text-sm min-h-[88px] resize-y"
+        style={{
+          borderColor: 'var(--border-color)',
+          background: 'var(--bg-primary)',
+          color: 'var(--text-primary)',
+        }}
+        placeholder="e.g. Chose another broker, not ready to buy, duplicate enquiry…"
+        autoFocus
+      />
+      <div className="flex justify-end gap-2 mt-4">
+        <Button type="button" variant="secondary" onClick={onCancel} disabled={saving}>
+          Cancel
+        </Button>
+        <Button type="button" onClick={onConfirm} isLoading={saving} disabled={!reason.trim()}>
+          Save &amp; move
+        </Button>
+      </div>
+    </div>
+  </div>
+);
+
+const LeadPipeline: React.FC<LeadPipelineProps> = ({ navigateToApplication, navigateToClient }) => {
+  const toast = useToast();
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [advisors, setAdvisors] = useState<Advisor[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverStatus, setDragOverStatus] = useState<LeadStatus | null>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
 
-  // Add Lead inline modal state
-  const [showAddLeadModal, setShowAddLeadModal] = useState(false);
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [leadSource, setLeadSource] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [qaFirst, setQaFirst] = useState('');
+  const [qaLast, setQaLast] = useState('');
+  const [qaEmail, setQaEmail] = useState('');
+  const [qaPhone, setQaPhone] = useState('');
+  const [qaLoan, setQaLoan] = useState('');
+  const [qaSubmitting, setQaSubmitting] = useState(false);
 
-  useEffect(() => {
-    crmService.getLeads()
-      .then(data => {
-        setLeads(data);
-        setIsLoading(false);
-      });
+  const [pendingLost, setPendingLost] = useState<Lead | null>(null);
+  const [lostReasonDraft, setLostReasonDraft] = useState('');
+  const [lostSaving, setLostSaving] = useState(false);
+
+  const [drawerLeadId, setDrawerLeadId] = useState<string | null>(null);
+  const drawerLead = useMemo(
+    () => (drawerLeadId ? leads.find((l) => l.id === drawerLeadId) ?? null : null),
+    [drawerLeadId, leads],
+  );
+
+  const { open: openGlobalAffordability } = useAffordabilityCalculator();
+  const [affordLead, setAffordLead] = useState<Lead | null>(null);
+
+  const currentAdvisor = crmService.getCurrentUser();
+
+  const loadLeads = useCallback(() => {
+    return crmService.getLeads().then((data) => {
+      setLeads(data);
+      return data;
+    });
   }, []);
 
-  const getLeadsByStatus = (status: LeadStatus) => {
-    return leads.filter(lead => lead.status === status);
+  useEffect(() => {
+    loadLeads().finally(() => setIsLoading(false));
+  }, [loadLeads]);
+
+  useEffect(() => {
+    crmService
+      .getAdvisors()
+      .then(setAdvisors)
+      .catch((e) => logger.error('Failed to load advisors for leads:', e));
+  }, []);
+
+  const boardLeads = useMemo(
+    () => leads.filter((lead) => lead.status !== LeadStatus.ClosedWon),
+    [leads],
+  );
+
+  const getLeadsByStatus = (status: LeadStatus) => boardLeads.filter((lead) => lead.status === status);
+
+  const handleDragStart = (e: React.DragEvent, lead: Lead) => {
+    setDraggingId(lead.id);
+    e.dataTransfer.setData('leadId', lead.id);
+    e.dataTransfer.setData('leadStatus', lead.status);
+    e.dataTransfer.effectAllowed = 'move';
   };
 
-  const resetAddLeadForm = () => {
-    setFirstName('');
-    setLastName('');
-    setEmail('');
-    setPhone('');
-    setLeadSource('');
-    setError(null);
-    setIsSubmitting(false);
+  const handleDragEnd = () => {
+    setDraggingId(null);
   };
 
-  const handleCreateLead = async (e: React.FormEvent) => {
+  const handleDragOver = (e: React.DragEvent, status: LeadStatus) => {
     e.preventDefault();
-    if (!firstName.trim() || !lastName.trim() || !email.trim()) {
-      setError('First name, last name, and email are required.');
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverStatus(status);
+  };
+
+  const handleDragLeave = () => {
+    setDragOverStatus(null);
+  };
+
+  const appendActivity = (existing: LeadActivityEntry[], message: string): LeadActivityEntry[] => [
+    ...existing,
+    { at: new Date().toISOString(), type: 'status_change', message },
+  ];
+
+  const applyStatusMove = async (leadId: string, targetStatus: LeadStatus, leadBefore: Lead) => {
+    setIsUpdating(true);
+    const nextActivity = appendActivity(leadBefore.leadActivity || [], `Moved to ${targetStatus}`);
+    try {
+      await crmService.updateClient(leadId, {
+        leadStatus: targetStatus,
+        leadActivity: nextActivity,
+      });
+      setLeads((prev) =>
+        prev.map((l) =>
+          l.id === leadId
+            ? {
+                ...l,
+                status: targetStatus,
+                leadActivity: nextActivity,
+                lostReason: targetStatus === LeadStatus.ClosedLost ? l.lostReason : undefined,
+              }
+            : l,
+        ),
+      );
+    } catch (err) {
+      logger.error('Failed to update lead status:', err);
+      toast.error(err instanceof Error ? err.message : 'Could not update lead status.');
+      await loadLeads();
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetStatus: LeadStatus) => {
+    e.preventDefault();
+    setDragOverStatus(null);
+    const leadId = e.dataTransfer.getData('leadId');
+    const sourceStatus = e.dataTransfer.getData('leadStatus') as LeadStatus;
+    if (!leadId || sourceStatus === targetStatus) {
+      setDraggingId(null);
       return;
     }
-    setIsSubmitting(true);
-    setError(null);
+    setDraggingId(null);
+
+    const leadBefore = leads.find((l) => l.id === leadId);
+    if (!leadBefore) return;
+
+    if (targetStatus === LeadStatus.ClosedLost) {
+      setPendingLost(leadBefore);
+      setLostReasonDraft('');
+      return;
+    }
+
+    await applyStatusMove(leadId, targetStatus, leadBefore);
+  };
+
+  const confirmLost = async () => {
+    if (!pendingLost || !lostReasonDraft.trim()) return;
+    setLostSaving(true);
+    const reason = lostReasonDraft.trim();
+    const nextActivity = appendActivity(
+      pendingLost.leadActivity || [],
+      `Closed — Lost: ${reason}`,
+    );
+    try {
+      await crmService.updateClient(pendingLost.id, {
+        leadStatus: LeadStatus.ClosedLost,
+        leadLostReason: reason,
+        leadActivity: nextActivity,
+      });
+      setLeads((prev) =>
+        prev.map((l) =>
+          l.id === pendingLost.id
+            ? {
+                ...l,
+                status: LeadStatus.ClosedLost,
+                lostReason: reason,
+                leadActivity: nextActivity,
+              }
+            : l,
+        ),
+      );
+      setPendingLost(null);
+      setLostReasonDraft('');
+      toast.success('Lead marked as lost');
+    } catch (err) {
+      logger.error('Failed to save lost reason:', err);
+      toast.error(err instanceof Error ? err.message : 'Could not update lead.');
+      await loadLeads();
+    } finally {
+      setLostSaving(false);
+    }
+  };
+
+  const cancelLost = () => {
+    setPendingLost(null);
+    setLostReasonDraft('');
+  };
+
+  const handleQuickAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!qaFirst.trim() || !qaLast.trim() || !qaEmail.trim()) {
+      toast.error('First name, last name, and email are required.');
+      return;
+    }
+    const loanNum = qaLoan.trim() === '' ? 0 : Number(qaLoan.replace(/,/g, ''));
+    if (qaLoan.trim() !== '' && !Number.isFinite(loanNum)) {
+      toast.error('Enter a valid loan amount.');
+      return;
+    }
+    setQaSubmitting(true);
     try {
       const newLead = await crmService.createLead({
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
-        email: email.trim(),
-        phone: phone.trim() || undefined,
-        leadSource: leadSource || undefined,
+        firstName: qaFirst.trim(),
+        lastName: qaLast.trim(),
+        email: qaEmail.trim(),
+        phone: qaPhone.trim() || undefined,
+        leadSource: 'Quick Add',
+        estimatedLoanAmount: loanNum,
       });
-      setLeads(prev => [newLead, ...prev]);
-      resetAddLeadForm();
-      setShowAddLeadModal(false);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Could not create lead.';
-      setError(message);
+      setLeads((prev) => [newLead, ...prev]);
+      setQaFirst('');
+      setQaLast('');
+      setQaEmail('');
+      setQaPhone('');
+      setQaLoan('');
+      toast.success('Lead added');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not add lead.');
     } finally {
-      setIsSubmitting(false);
+      setQaSubmitting(false);
     }
+  };
+
+  const handleLeadSaved = (updated: Lead) => {
+    setLeads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
+  };
+
+  const handleConvertSuccess = () => {
+    if (drawerLeadId) {
+      setLeads((prev) => prev.filter((l) => l.id !== drawerLeadId));
+    }
+    setDrawerLeadId(null);
+    toast.success('Lead converted to client. All notes and data preserved.');
+  };
+
+  const inputCls =
+    'px-2.5 py-1.5 rounded-md border text-sm min-w-0 flex-1 sm:flex-none sm:w-36';
+  const inputStyle: React.CSSProperties = {
+    borderColor: 'var(--border-color)',
+    background: 'var(--bg-card)',
+    color: 'var(--text-primary)',
   };
 
   return (
-    <div>
-       <div className="flex justify-between items-center mb-6">
-        <div>
-          <h2 className="text-2xl font-bold">Lead Pipeline</h2>
-          <p className="text-gray-500 dark:text-gray-400">Track leads from creation to close.</p>
-        </div>
-        <Button leftIcon="PlusCircle" onClick={() => setShowAddLeadModal(true)}>Add Lead</Button>
+    <div className="pb-8">
+      <div className="mb-4">
+        <h2 className="text-2xl font-bold m-0">Lead Pipeline</h2>
+        <p className="text-gray-500 dark:text-gray-400 mt-1 mb-0">
+          Drag cards between stages to track your lead progression.
+        </p>
       </div>
 
-      {showAddLeadModal && (
-        <Card className="mb-6">
-          <form onSubmit={handleCreateLead} className="space-y-4">
-            {error && (
-              <div className="p-3 rounded-md bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 text-sm">
-                {error}
-              </div>
-            )}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">First Name</label>
-                <input
-                  type="text"
-                  value={firstName}
-                  onChange={e => setFirstName(e.target.value)}
-                  className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Last Name</label>
-                <input
-                  type="text"
-                  value={lastName}
-                  onChange={e => setLastName(e.target.value)}
-                  className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
-                  required
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Phone</label>
-                <input
-                  type="tel"
-                  value={phone}
-                  onChange={e => setPhone(e.target.value)}
-                  className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Lead Source</label>
-              <select
-                value={leadSource}
-                onChange={e => setLeadSource(e.target.value)}
-                className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"
-              >
-                <option value="">Select source</option>
-                <option value="Website">Website</option>
-                <option value="Referral">Referral</option>
-                <option value="Facebook">Facebook</option>
-                <option value="Walk-in">Walk-in</option>
-                <option value="Other">Other</option>
-              </select>
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => {
-                  resetAddLeadForm();
-                  setShowAddLeadModal(false);
-                }}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" isLoading={isSubmitting}>
-                Create Lead
-              </Button>
-            </div>
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <Button
+          type="button"
+          variant="secondary"
+          leftIcon="Percent"
+          onClick={() => openGlobalAffordability()}
+        >
+          Affordability
+        </Button>
+        <button
+          type="button"
+          className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold border transition-colors"
+          style={{
+            background: 'var(--bg-card)',
+            borderColor: 'var(--border-color)',
+            color: 'var(--text-primary)',
+          }}
+          onClick={() => setQuickAddOpen((o) => !o)}
+          aria-expanded={quickAddOpen}
+          aria-controls="lead-quick-add-panel"
+        >
+          <span className="text-lg leading-none">+</span>
+          Quick Add
+        </button>
+      </div>
+
+      {quickAddOpen && (
+        <div
+          id="lead-quick-add-panel"
+          className="mb-6 rounded-xl border p-3 shadow-sm"
+          style={{
+            borderColor: 'var(--border-color)',
+            background: 'var(--bg-card)',
+          }}
+        >
+          <form onSubmit={handleQuickAdd} className="flex flex-wrap items-end gap-2">
+            <input
+              type="text"
+              value={qaFirst}
+              onChange={(e) => setQaFirst(e.target.value)}
+              className={inputCls}
+              style={{ ...inputStyle, width: '7rem' }}
+              placeholder="First name"
+              autoComplete="given-name"
+              autoFocus
+            />
+            <input
+              type="text"
+              value={qaLast}
+              onChange={(e) => setQaLast(e.target.value)}
+              className={inputCls}
+              style={{ ...inputStyle, width: '7rem' }}
+              placeholder="Last name"
+              autoComplete="family-name"
+            />
+            <input
+              type="email"
+              value={qaEmail}
+              onChange={(e) => setQaEmail(e.target.value)}
+              className={inputCls}
+              style={{ ...inputStyle, flex: '1 1 12rem', minWidth: '10rem' }}
+              placeholder="Email"
+              autoComplete="email"
+            />
+            <input
+              type="tel"
+              value={qaPhone}
+              onChange={(e) => setQaPhone(e.target.value)}
+              className={inputCls}
+              style={{ ...inputStyle, width: '8rem' }}
+              placeholder="Phone"
+              autoComplete="tel"
+            />
+            <input
+              type="text"
+              inputMode="decimal"
+              value={qaLoan}
+              onChange={(e) => setQaLoan(e.target.value)}
+              className={inputCls}
+              style={{ ...inputStyle, width: '7rem' }}
+              placeholder="Loan $"
+            />
+            <Button type="submit" size="sm" isLoading={qaSubmitting} className="shrink-0">
+              Add
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="shrink-0"
+              onClick={() => setQuickAddOpen(false)}
+            >
+              Close
+            </Button>
           </form>
-        </Card>
+          <p className="text-xs mt-2 mb-0" style={{ color: 'var(--text-muted)' }}>
+            Creates a lead in <strong>New Lead</strong>. Press Enter in any field to submit.
+          </p>
+        </div>
       )}
-      
+
       {isLoading ? (
         <div className="flex justify-center items-center h-96">
           <Icon name="Loader" className="h-10 w-10 animate-spin text-primary-500" />
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
-          {LEAD_STATUS_COLUMNS.map(status => (
-            <div key={status} className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4">
-              <h3 className="font-semibold mb-4 text-center text-gray-600 dark:text-gray-300">
-                {status.toUpperCase()} ({getLeadsByStatus(status).length})
+        <div className="flex gap-4 overflow-x-auto pb-2 -mx-1 px-1" style={{ scrollbarGutter: 'stable' }}>
+          {LEAD_STATUS_COLUMNS.map((status) => (
+            <div
+              key={status}
+              className={`flex-shrink-0 w-72 rounded-lg p-3 min-h-[200px] transition-all ${
+                isUpdating ? 'opacity-50 pointer-events-none' : ''
+              } ${dragOverStatus === status ? 'ring-2 ring-primary-500 ring-inset' : ''}`}
+              style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)' }}
+              onDragOver={(e) => handleDragOver(e, status)}
+              onDragLeave={handleDragLeave}
+              onDrop={(e) => handleDrop(e, status)}
+            >
+              <h3
+                className="font-semibold mb-3 text-center text-sm leading-tight px-1"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                {status} ({getLeadsByStatus(status).length})
               </h3>
-              <div className="h-[calc(100vh-20rem)] overflow-y-auto pr-2">
-                {getLeadsByStatus(status).map(lead => (
-                  <LeadCard key={lead.id} lead={lead} />
+              <div className="max-h-[calc(100vh-16rem)] overflow-y-auto pr-1">
+                {getLeadsByStatus(status).map((lead) => (
+                  <LeadCard
+                    key={lead.id}
+                    lead={lead}
+                    advisors={advisors}
+                    onOpenDetail={(l) => setDrawerLeadId(l.id)}
+                    onDragHandleStart={handleDragStart}
+                    onDragEnd={handleDragEnd}
+                    isDragging={draggingId === lead.id}
+                  />
                 ))}
               </div>
             </div>
           ))}
         </div>
       )}
+
+      {pendingLost && (
+        <LostReasonDialog
+          lead={pendingLost}
+          reason={lostReasonDraft}
+          setReason={setLostReasonDraft}
+          saving={lostSaving}
+          onConfirm={confirmLost}
+          onCancel={cancelLost}
+        />
+      )}
+
+      <LeadDetailDrawer
+        lead={drawerLead}
+        open={drawerLead != null}
+        onClose={() => setDrawerLeadId(null)}
+        advisors={advisors}
+        currentAdvisor={currentAdvisor}
+        onLeadSaved={handleLeadSaved}
+        onRequestDisqualify={(l) => {
+          setPendingLost(l);
+          setLostReasonDraft('');
+        }}
+        onOpenAffordability={(l) => setAffordLead(l)}
+        navigateToClient={navigateToClient}
+        onConvertSuccess={handleConvertSuccess}
+      />
+
+      <AffordabilityCalculatorStandaloneModal
+        key={affordLead?.id ?? 'closed'}
+        open={affordLead != null}
+        onClose={() => setAffordLead(null)}
+        initialValues={affordLead ? leadToAffordabilityDefaults(affordLead) : undefined}
+        convertLead={
+          affordLead
+            ? {
+                leadId: affordLead.id,
+                name: affordLead.name,
+                email: affordLead.email,
+                phone: affordLead.phone || undefined,
+              }
+            : undefined
+        }
+        navigateToApplication={navigateToApplication}
+      />
     </div>
   );
 };
 
 export default LeadPipeline;
-
