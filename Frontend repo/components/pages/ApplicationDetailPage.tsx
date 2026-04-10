@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import type { Application, Client } from '../../types';
 import { Button } from '../common/Button';
 import { Icon, IconName } from '../common/Icon';
@@ -17,14 +17,20 @@ import { LenderMatchTab } from '../applications/LenderMatchTab';
 import { ApplicationIntelligence } from '../applications/ApplicationIntelligence';
 import { SmartComplianceTab } from '../applications/SmartComplianceTab';
 import FinancialProfileTab from '../applications/FinancialProfileTab';
-import { FlowIntelligencePanel } from '../flow/FlowIntelligencePanel';
+import {
+  FlowIntelligencePanel,
+  type FlowOpenDetail,
+} from '../flow/FlowIntelligencePanel';
 import { AffordabilityCalculatorProvider } from '../common/AffordabilityCalculator';
-import { IssuesPanel, type Issue } from '@/components/deals/IssuesPanel';
-import { FieldWithAnomaly } from '@/components/ui/FieldWithAnomaly';
+import { IntelligenceTab } from '@/components/deals/IntelligenceTab';
+import type { IssuesPanelAnomaly } from '@/components/deals/IssuesPanel';
+import { IssuesPanel } from '@/components/deals/IssuesPanel';
+import { useIntelligence } from '@/hooks/useIntelligence';
 
 const TABS: { id: string; name: string; icon: IconName }[] = [
   { id: 'overview', name: 'Overview', icon: 'FileText' },
-  { id: 'Agents', name: 'Intelligence', icon: 'Bot' },
+  { id: 'intelligence', name: 'Intelligence', icon: 'BarChart3' },
+  { id: 'Agents', name: 'AI copilot', icon: 'Bot' },
   { id: 'financial', name: 'Financial Profile', icon: 'Wallet' },
   { id: 'assets', name: 'Assets', icon: 'Gem' },
   { id: 'liabilities', name: 'Liabilities', icon: 'Landmark' },
@@ -85,7 +91,6 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
   const [documentsRealtimeTick, setDocumentsRealtimeTick] = useState(0);
   const [notesRefreshTick, setNotesRefreshTick] = useState(0);
   const currentUser = null as { id?: string } | null;
-  const [showFIPanel, setShowFIPanel] = useState(false);
 
 
 
@@ -103,12 +108,24 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
     setNotesRefreshTick(0);
   }, [application.id]);
 
+  const applicationId = application.id;
 
+  const { data: intel } = useIntelligence(applicationId);
 
+  const readiness = intel?.readiness as Record<string, unknown> | null | undefined;
+  const score = Number(readiness?.total_score) || 0;
+  const grade = (readiness?.score_grade as string | undefined) ?? 'F';
 
-
-
-
+  const anomalies: IssuesPanelAnomaly[] = useMemo(() => {
+    const rows = intel?.anomalies ?? [];
+    return rows.map((row: Record<string, unknown>) => ({
+      id: String(row.id ?? ''),
+      severity: String(row.severity ?? 'medium'),
+      title: (row.title as string) ?? undefined,
+      description: (row.description as string) ?? undefined,
+      check_name: (row.flag_code as string) ?? undefined,
+    }));
+  }, [intel?.anomalies]);
 
 
   const renderOverview = () => (
@@ -129,6 +146,12 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
         return (
           <ErrorBoundary fallbackMessage="Failed to load this tab">
             {renderOverview()}
+          </ErrorBoundary>
+        );
+      case 'intelligence':
+        return (
+          <ErrorBoundary fallbackMessage="Failed to load this tab">
+            <IntelligenceTab applicationId={application.id} />
           </ErrorBoundary>
         );
       case 'Agents':
@@ -231,72 +254,47 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
   const loanMeta = application as Application & { loan_purpose?: string; loanPurpose?: string };
   const loanPurposeLabel =
     loanMeta.loan_purpose?.trim() || loanMeta.loanPurpose?.trim() || 'Purchase';
-  const headerLoanDisplay =
+  const loanK =
     application.loanAmount != null && application.loanAmount > 0
-      ? `$${Number(application.loanAmount).toLocaleString()}`
+      ? `$${(application.loanAmount / 1000).toFixed(0)}k`
       : '—';
-
-  const headerIssues: Issue[] = [
-    {
-      id: 'expenses-hem',
-      severity: 'high',
-      title: 'Expenses below HEM',
-      description:
-        'Declared $758/mo vs HEM $3,400/mo. Lender will use HEM for servicing, reducing borrowing capacity by ~$180k.',
-      field: 'Total expenses',
-      fix: () => {
-        setActiveTab('financial');
-      },
-    },
-    {
-      id: 'ird-missing',
-      severity: 'critical',
-      title: 'Missing IRD number',
-      description: 'Required for income verification with IRD.',
-      field: 'IRD Number',
-    },
-  ];
 
   return (
     <div className="text-gray-900 dark:text-gray-100">
-      {/* Top header */}
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div className="flex min-w-0 flex-wrap items-start gap-3">
+      <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+        <div className="flex min-w-0 items-start gap-3">
           <Button onClick={onBack} variant="secondary" leftIcon="ArrowLeft" className="flex-shrink-0">
             Back
           </Button>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">{client.name || 'Unknown'}</h1>
+              <h1 className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-white">
+                {client.name || 'Unknown'}
+              </h1>
               <WorkflowPill stage={currentStage} />
-              <IssuesPanel score={67} issues={headerIssues} />
+              <IssuesPanel score={score} grade={grade} anomalies={anomalies} />
             </div>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              {application.referenceNumber ?? '—'} · {loanPurposeLabel} · {headerLoanDisplay}
+              {application.referenceNumber ?? '—'} · {loanPurposeLabel} · {loanK}
             </p>
           </div>
         </div>
         <button
           type="button"
-          onClick={() => setShowFIPanel(true)}
-          style={{
-            fontSize: 11,
-            fontWeight: 600,
-            color: '#6366f1',
-            background: '#eef2ff',
-            border: '1px solid #c7d2fe',
-            borderRadius: 7,
-            padding: '6px 14px',
-            cursor: 'pointer',
-          }}
+          onClick={() =>
+            window.dispatchEvent(
+              new CustomEvent<FlowOpenDetail>('flow:open', {
+                detail: {
+                  context: { applicationId: application.id, score, grade },
+                },
+              }),
+            )
+          }
+          className="rounded-lg border border-indigo-200 bg-indigo-50 px-3.5 py-1.5 text-[11px] font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-200 dark:hover:bg-indigo-900/50"
         >
           ✨ Ask Flow Intelligence
         </button>
       </div>
-
-      {showFIPanel && (
-        <FlowIntelligencePanel applicationId={application.id} onClose={() => setShowFIPanel(false)} />
-      )}
 
       {/* Tabs */}
       <Card className="p-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 overflow-hidden">
@@ -326,7 +324,7 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
         </main>
       </Card>
 
-
+      <FlowIntelligencePanel applicationId={application.id} />
     </div>
   );
 };

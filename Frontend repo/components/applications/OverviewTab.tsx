@@ -15,7 +15,9 @@ import { useToast } from '../../hooks/useToast';
 import { GenerateSOAPopup } from '../soa/GenerateSOAPopup';
 import { PropertyInformationSection } from '@/components/deals/PropertyInformationSection';
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete';
-import { FieldWithAnomaly } from '@/components/ui/FieldWithAnomaly';
+import type { FieldAnomalyHint } from '@/components/deals/FieldWithAnomaly';
+import { FieldWithAnomaly } from '@/components/deals/FieldWithAnomaly';
+import { useIntelligence } from '@/hooks/useIntelligence';
 import { SoaStatusCard } from '@/components/deals/SoaStatusCard';
 import { layerText } from '../soa/soaAgentUtils';
 import {
@@ -134,6 +136,26 @@ function companyTileEmail(c: Company): string {
   return typeof v === 'string' && v.trim() !== '' ? v : '—';
 }
 
+/** Picks an open anomaly relevant to declared living expenses / HEM for inline field highlighting. */
+function pickExpenseRelatedAnomaly(
+  rows: Record<string, unknown>[] | undefined | null,
+): FieldAnomalyHint | undefined {
+  if (!rows?.length) return undefined;
+  const re = /hem|expense|living|benchmark|servic|declared/i;
+  const hit = rows.find((a) => {
+    const blob = `${a.flag_code ?? ''} ${a.title ?? ''} ${a.flag_category ?? ''} ${a.description ?? ''}`;
+    return re.test(blob);
+  });
+  if (!hit) return undefined;
+  const title =
+    typeof hit.title === 'string' && hit.title.trim() !== '' ? hit.title.trim() : 'Expense check';
+  const description =
+    typeof hit.description === 'string' && hit.description.trim() !== ''
+      ? hit.description.trim()
+      : 'Review this figure against lender benchmarks.';
+  return { title, description };
+}
+
 /** Extracts lender comparison rows from stored quant matrix JSON for PDF export. */
 function comparisonFromQuantMatrix(quant: unknown): Record<string, unknown>[] | undefined {
   if (quant == null || typeof quant !== 'object') return undefined;
@@ -189,6 +211,17 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   const [recommendationError, setRecommendationError] = useState<string | null>(null);
   const toast = useToast();
   const [savingLending, setSavingLending] = useState(false);
+
+  const applicationIdForIntel =
+    application?.id != null && String(application.id).trim() !== '' ? String(application.id) : '';
+  const { data: intelOverview } = useIntelligence(applicationIdForIntel);
+  const expenseFieldAnomaly = useMemo(
+    () =>
+      pickExpenseRelatedAnomaly(
+        (intelOverview?.anomalies ?? undefined) as Record<string, unknown>[] | undefined,
+      ),
+    [intelOverview?.anomalies],
+  );
 
   const [loanAmountEdit, setLoanAmountEdit] = useState<string>('');
   const [applicationTypeEdit, setApplicationTypeEdit] = useState<string>(() =>
@@ -1130,12 +1163,12 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                 </div>
                 <FieldWithAnomaly
                   label="TOTAL EXPENSES (ANNUAL)"
-                  anomaly={{
-                    message: 'Below HEM benchmark',
-                    detail:
-                      '$9,095 vs expected ~$40,800 for couple with 1 dependant. Lenders will use HEM.',
-                  }}
-                  helperText="Using HEM $3,400/mo for servicing"
+                  anomaly={expenseFieldAnomaly}
+                  helperText={
+                    expenseFieldAnomaly
+                      ? 'Declared expenses affect servicing; lenders may apply HEM when figures look low.'
+                      : undefined
+                  }
                 >
                   <input
                     type="text"
@@ -1146,7 +1179,11 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                       const n = Number(String(v).replace(/[^0-9.]/g, '')) || 0;
                       setFinancials((f) => ({ ...f, expenses: n }));
                     }}
-                    className="w-full rounded-md border-0 bg-amber-50/50 px-3 py-2.5 text-sm transition-colors focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 dark:bg-amber-950/25 dark:text-gray-100 dark:focus:bg-gray-900"
+                    className={
+                      expenseFieldAnomaly
+                        ? 'w-full rounded-md border-0 bg-amber-50/50 px-3 py-2.5 text-sm transition-colors focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 dark:bg-amber-950/25 dark:text-gray-100 dark:focus:bg-gray-900'
+                        : inputClasses
+                    }
                     placeholder="$0.00"
                   />
                 </FieldWithAnomaly>
