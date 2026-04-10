@@ -7,7 +7,7 @@ import { DuplicateWarningModal } from '../common/DuplicateWarningModal';
 import { BankStatementParser } from '../applications/BankStatementParser';
 import { sha256HexFromFile } from '../../utils/fileHash';
 import { useToast } from '../../hooks/useToast';
-import { invokeFunction } from '../../src/lib/api';
+import { invokeParseBankStatement } from '../../src/lib/api';
 import { DocumentsService } from '../../src/services/documents.service';
 
 interface ChecklistItem {
@@ -42,6 +42,45 @@ interface UploadedDoc {
   file_type: string;
   file_size_bytes: number;
   parse_status?: string;
+  kyc_section?: string | null;
+  parsed_bank_name?: string | null;
+}
+
+/** Heuristic match for legacy documents uploaded before `kyc_section` was set. */
+function isLikelyMatchForItem(doc: UploadedDoc, item: ChecklistItem): boolean {
+  const name = (doc.name || (doc as { file_name?: string }).file_name || '').toLowerCase();
+  if (item.id === 'BANK_STATEMENTS_3M' || item.id === 'SE_BANK_STATEMENTS') {
+    return (
+      name.includes('bank') ||
+      name.includes('statement') ||
+      doc.parsed_bank_name != null
+    );
+  }
+  if (item.id === 'INC_PAYSLIPS') {
+    return name.includes('payslip') || name.includes('pay slip');
+  }
+  if (item.id === 'KIWISAVER_STATEMENT') {
+    return name.includes('kiwisaver') || name.includes('kiwi saver');
+  }
+  if (item.id === 'ID_PHOTO_PRIMARY' || item.id === 'ID_PROOF_ADDRESS') {
+    return (
+      name.includes('licence') ||
+      name.includes('license') ||
+      name.includes('passport') ||
+      name.includes('id') ||
+      name.includes('proof')
+    );
+  }
+  return true;
+}
+
+/** Maps a document row to the checklist item it belongs under. */
+function documentMatchesChecklistItem(doc: UploadedDoc, item: ChecklistItem): boolean {
+  if (doc.kyc_section === item.id) return true;
+  if (doc.kyc_section == null || doc.kyc_section === '') {
+    return doc.category === item.category && isLikelyMatchForItem(doc, item);
+  }
+  return false;
 }
 
 type ParseQueueRecord = {
@@ -129,6 +168,7 @@ export const DocumentChecklistTab: React.FC<Props> = ({ applicationId }) => {
   const [parseQueueByDocId, setParseQueueByDocId] = useState<Record<string, ParseQueueRecord>>({});
   const [firmId, setFirmId] = useState<string | null>(null);
   const [reparseBusyId, setReparseBusyId] = useState<string | null>(null);
+  const [reparseProgressLabel, setReparseProgressLabel] = useState<string | null>(null);
   const [markingId, setMarkingId] = useState<string | null>(null);
   const [sendingRequest, setSendingRequest] = useState(false);
 
@@ -146,7 +186,7 @@ export const DocumentChecklistTab: React.FC<Props> = ({ applicationId }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const addFileInputRef = useRef<HTMLInputElement>(null);
   const activeItemRef = useRef<ChecklistItem | null>(null);
-  const addItemRef = useRef<{ category: string; name: string } | null>(null);
+  const addItemRef = useRef<{ category: string; name: string; checklistItemId?: string } | null>(null);
 
   const fetchParseQueueRows = useCallback(async () => {
     try {
@@ -208,11 +248,20 @@ export const DocumentChecklistTab: React.FC<Props> = ({ applicationId }) => {
 
       if (cl) {
         setChecklist(cl);
-        const uploadedCats = new Set((docs || []).map((d: any) => d.category));
-        const merged = (cl.checklist_items || []).map((item: ChecklistItem) => ({
-          ...item,
-          status: uploadedCats.has(item.category) ? 'uploaded' as const : item.status,
-        }));
+        const docRows = (docs || []) as UploadedDoc[];
+        const merged = (cl.checklist_items || []).map((item: ChecklistItem) => {
+          const hasDoc = docRows.some((d) => documentMatchesChecklistItem(d, item));
+          if (item.status === 'waived' || item.status === 'requested') {
+            return { ...item };
+          }
+          if (hasDoc) {
+            return { ...item, status: 'uploaded' as const };
+          }
+          if (item.status === 'uploaded' && !hasDoc) {
+            return { ...item, status: 'pending' as const };
+          }
+          return { ...item };
+        });
         setItems(merged);
       }
 
@@ -381,11 +430,12 @@ export const DocumentChecklistTab: React.FC<Props> = ({ applicationId }) => {
     }
   }
 
-  async function doUpload(file: File, category: string) {
+  async function doUpload(file: File, category: string, checklistItemId?: string) {
     const fileHash = await sha256HexFromFile(file);
     const ins = await DocumentsService.upload(file, {
       applicationId,
       category,
+      ...(checklistItemId ? { kycSection: checklistItemId } : {}),
       status: 'Valid',
       uploadDate: new Date().toISOString().split('T')[0],
       fileHash,
@@ -405,7 +455,7 @@ export const DocumentChecklistTab: React.FC<Props> = ({ applicationId }) => {
     if (!file || !item) return;
     setUploadingId(item.id);
     try {
-      await doUpload(file, item.category);
+      await doUpload(file, item.category, item.id);
       await loadAll();
       toast.success('Document uploaded');
     } catch (err: any) {
@@ -424,7 +474,7 @@ export const DocumentChecklistTab: React.FC<Props> = ({ applicationId }) => {
     const key = 'add_' + meta.category;
     setUploadingId(key);
     try {
-      await doUpload(file, meta.category);
+      await doUpload(file, meta.category, meta.checklistItemId);
       await loadAll();
       toast.success('Document uploaded');
     } catch (err: any) {
@@ -548,13 +598,23 @@ export const DocumentChecklistTab: React.FC<Props> = ({ applicationId }) => {
       return;
     }
     setReparseBusyId(queue.id);
+    setReparseProgressLabel('Queued…');
     try {
-      const { data, error } = await invokeFunction<Record<string, unknown>>('parse-bank-statement', {
-        parse_queue_id: queue.id,
-        document_id: docId,
-        application_id: applicationId,
-        firm_id: firmId,
-      });
+      const { data, error } = await invokeParseBankStatement(
+        {
+          parse_queue_id: queue.id,
+          document_id: docId,
+          application_id: applicationId,
+          firm_id: firmId,
+        },
+        {
+          onProgress: (row) => {
+            const pct = Number(row.progress_pct) || 0;
+            setReparseProgressLabel(`${row.current_step || row.status} · ${pct}%`);
+          },
+        },
+      );
+      setReparseProgressLabel(null);
       if (error) throw new Error(error);
       if (data && typeof data === 'object' && 'error' in data && (data as { error?: string }).error) {
         throw new Error((data as { error: string }).error);
@@ -567,6 +627,7 @@ export const DocumentChecklistTab: React.FC<Props> = ({ applicationId }) => {
       toast.error('Failed to re-parse document: ' + msg);
     } finally {
       setReparseBusyId(null);
+      setReparseProgressLabel(null);
     }
   }
 
@@ -733,6 +794,7 @@ export const DocumentChecklistTab: React.FC<Props> = ({ applicationId }) => {
             {showReparse && pq && (
               <button
                 type="button"
+                title={reparseBusyId === pq.id ? (reparseProgressLabel ?? undefined) : undefined}
                 onClick={() => void handleReparse(pq, doc.id)}
                 disabled={reparseBusyId === pq.id}
                 style={{
@@ -745,9 +807,13 @@ export const DocumentChecklistTab: React.FC<Props> = ({ applicationId }) => {
                   background: '#f0fdfa',
                   cursor: reparseBusyId === pq.id ? 'wait' : 'pointer',
                   opacity: reparseBusyId === pq.id ? 0.6 : 1,
+                  maxWidth: 200,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
                 }}
               >
-                {reparseBusyId === pq.id ? '…' : 'Re-parse'}
+                {reparseBusyId === pq.id ? (reparseProgressLabel ?? '…') : 'Re-parse'}
               </button>
             )}
             <button className="btn-view" onClick={() => setViewerDoc({ url: doc.url, name: doc.name, type: doc.file_type || '' })}>View</button>
@@ -929,7 +995,7 @@ export const DocumentChecklistTab: React.FC<Props> = ({ applicationId }) => {
               {catItems.map((item, idx) => {
                 const cfg = STATUS_CFG[item.status] || STATUS_CFG.pending;
                 const isUploading = uploadingId === item.id;
-                const matchedDocs = uploadedDocs.filter(d => d.category === item.category);
+                const matchedDocs = uploadedDocs.filter((d) => documentMatchesChecklistItem(d, item));
                 const hasFail = matchedDocs.some(d => d.validation_warnings?.some(w => w.severity === 'fail'));
                 const hasWarn = matchedDocs.some(d => d.validation_warnings?.some(w => w.severity === 'warning'));
                 const borderColor = item.status === 'uploaded'
@@ -986,7 +1052,7 @@ export const DocumentChecklistTab: React.FC<Props> = ({ applicationId }) => {
 
                     <div className="item-add">
                       <button className="btn-add-more" onClick={() => {
-                        addItemRef.current = { category: item.category, name: item.name };
+                        addItemRef.current = { category: item.category, name: item.name, checklistItemId: item.id };
                         if (addFileInputRef.current) addFileInputRef.current.click();
                       }} disabled={uploadingId === 'add_' + item.category} style={{ opacity: uploadingId === 'add_' + item.category ? 0.6 : 1, cursor: uploadingId === 'add_' + item.category ? 'not-allowed' : 'pointer' }}>
                         {uploadingId === 'add_' + item.category ? 'Uploading...' : '+ Add another document'}

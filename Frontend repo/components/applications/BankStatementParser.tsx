@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useToast } from '../../hooks/useToast';
-import { invokeFunction } from '../../src/lib/api';
+import { invokeParseBankStatement } from '../../src/lib/api';
 import { ExpensesService } from '../../src/services/expenses.service';
 import { IncomeService } from '../../src/services/income.service';
 import { DocumentsService } from '../../src/services/documents.service';
@@ -324,11 +324,19 @@ export const BankStatementParser: React.FC<Props> = ({
     setProgress('Parsing statement with AI...');
 
     try {
-      const { data, error } = await invokeFunction<Record<string, any>>('parse-bank-statement', {
-        document_id: document.id,
-        application_id: document.application_id,
-        firm_id: document.firm_id,
-      });
+      const { data, error } = await invokeParseBankStatement(
+        {
+          document_id: document.id,
+          application_id: document.application_id,
+          firm_id: document.firm_id,
+        },
+        {
+          onProgress: (row) => {
+            const pct = Number(row.progress_pct) || 0;
+            setProgress(`${row.current_step || row.status || 'Processing'} — ${pct}%`);
+          },
+        },
+      );
 
       if (error) {
         setError('Failed to parse: ' + error);

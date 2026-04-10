@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, type DragEvent, type ChangeEvent, type CSSProperties } from 'react'
 import { supabase } from '../../src/lib/supabase'
-import { invokeFunction } from '../../src/lib/api'
+import { invokeParseBankStatement } from '../../src/lib/api'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
 import { BankStatementParser, parseAnomaliesFromExtracted } from './BankStatementParser'
+import { BankTransactionViewer } from './BankTransactionViewer'
 import { logger } from '../../utils/logger'
 
 interface Props {
@@ -360,6 +361,7 @@ export default function FinancialProfileTab({ applicationId, firmId }: Props) {
   const [expenses, setExpenses] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [parseResult, setParseResult] = useState<string | null>(null)
+  const [parseJobProgress, setParseJobProgress] = useState<{ pct: number; step: string } | null>(null)
   const [parsing, setParsing] = useState(false)
   /** Selected document type for the next Magic Drop upload; null = let Edge Function infer. */
   const [magicDropDetectedType, setMagicDropDetectedType] = useState<string | null>(null)
@@ -397,6 +399,8 @@ export default function FinancialProfileTab({ applicationId, firmId }: Props) {
     childcare: 0,
     other_discretionary: 0,
   })
+  /** Bumps when bank docs are parsed so `BankTransactionViewer` refetches coverage and lines. */
+  const [bankViewerReloadNonce, setBankViewerReloadNonce] = useState(0)
 
   // ── Data loading ─────────────────────────────────────────────
   const loadAll = useCallback(async () => {
@@ -605,6 +609,7 @@ export default function FinancialProfileTab({ applicationId, firmId }: Props) {
     setParseResult('Uploading...')
 
     for (const file of files) {
+      setParseJobProgress(null)
       try {
         const { data: { user } } = await supabase.auth.getUser()
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
@@ -625,6 +630,7 @@ export default function FinancialProfileTab({ applicationId, firmId }: Props) {
           file_type: file.type,
           file_size_bytes: file.size,
           category: '02 Financial Evidence',
+          kyc_section: 'BANK_STATEMENTS_3M',
           uploaded_by: user?.id,
           status: 'active',
         }
@@ -653,16 +659,25 @@ export default function FinancialProfileTab({ applicationId, firmId }: Props) {
           continue
         }
 
-        setParseResult('Parsing with AI...')
+        setParseResult('Parsing with AI…')
 
-        const { data: parseData, error: parseFnError } = await invokeFunction<Record<string, unknown>>(
-          'parse-bank-statement',
+        const { data: parseData, error: parseFnError } = await invokeParseBankStatement(
           {
             document_id: doc.id,
             application_id: applicationId,
             firm_id: firmId,
+            applicant_id: firstApplicant.id,
+          },
+          {
+            onProgress: (row) => {
+              const pct = Math.min(100, Math.max(0, Number(row.progress_pct) || 0))
+              const step = row.current_step || row.status || 'Processing'
+              setParseJobProgress({ pct, step })
+            },
           },
         )
+
+        setParseJobProgress(null)
 
         if (parseFnError) {
           setParseResult(`Upload saved — parse failed: ${parseFnError}`)
@@ -688,12 +703,14 @@ export default function FinancialProfileTab({ applicationId, firmId }: Props) {
           logger.error('Parse result:', parseData)
         }
       } catch (err: any) {
+        setParseJobProgress(null)
         setParseResult('Error: ' + err.message)
       }
     }
 
     setParsing(false)
     await loadAll()
+    setBankViewerReloadNonce((n) => n + 1)
   }
 
   function handleDrop(e: DragEvent<HTMLDivElement>) {
@@ -840,6 +857,23 @@ export default function FinancialProfileTab({ applicationId, firmId }: Props) {
                 {parsing ? 'Processing...' : 'Click to browse or drag files here'}
               </span>
             </label>
+            {parseJobProgress && (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>{parseJobProgress.step}</div>
+                <div style={{ height: 6, background: '#e2e8f0', borderRadius: 3, overflow: 'hidden' }}>
+                  <div
+                    style={{
+                      height: '100%',
+                      width: `${parseJobProgress.pct}%`,
+                      background: '#6366f1',
+                      borderRadius: 3,
+                      transition: 'width 0.25s ease',
+                    }}
+                  />
+                </div>
+                <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 2 }}>{parseJobProgress.pct}%</div>
+              </div>
+            )}
             {parseResult && (
               <div style={{ marginTop: 8, fontSize: 12, color: '#6366f1' }}>{parseResult}</div>
             )}
@@ -868,6 +902,12 @@ export default function FinancialProfileTab({ applicationId, firmId }: Props) {
           </div>
         </div>
       </div>
+
+      <BankTransactionViewer
+        applicationId={applicationId}
+        firmId={firmId}
+        reloadNonce={bankViewerReloadNonce}
+      />
 
       <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid #e2e8f0', marginBottom: 20 }}>
         {(['overview', 'income', 'expenses'] as const).map(tab => (
@@ -1239,6 +1279,7 @@ export default function FinancialProfileTab({ applicationId, firmId }: Props) {
                     onComplete={() => {
                       setBankStatementReview(null)
                       void loadAll()
+                      setBankViewerReloadNonce((n) => n + 1)
                     }}
                     onClose={() => setBankStatementReview(null)}
                   />

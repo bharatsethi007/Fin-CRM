@@ -12,6 +12,9 @@ import { LicenceSettings } from '../settings/LicenceSettings';
 import { MFASettings } from '../settings/MFASettings';
 import { Icon } from '../common/Icon';
 import { SETTINGS_NAV_ITEMS } from '../settings/settingsConstants';
+import { SettingsKnowledgeBank } from '../settings/SettingsKnowledgeBank';
+import { SettingsSentences } from '../settings/SettingsSentences';
+import { SettingsPreferences } from '../settings/SettingsPreferences';
 
 interface SettingsPageProps {
   advisor: Advisor;
@@ -58,6 +61,12 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ advisor, onBack, initialSec
         return <LicenceSettings />;
       case 'mfa':
         return <MFASettings advisor={advisor} />;
+      case 'knowledge-bank':
+        return <SettingsKnowledgeBank firmId={advisor.firmId} />;
+      case 'sentences':
+        return <SettingsSentences firmId={advisor.firmId} />;
+      case 'preferences':
+        return <SettingsPreferences firmId={advisor.firmId} />;
       case 'security':
         return (
           <div className="max-w-2xl space-y-4 p-2">

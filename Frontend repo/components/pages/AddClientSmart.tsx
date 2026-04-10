@@ -4,7 +4,7 @@ import { crmService } from '../../services/api';
 import { authService } from '../../services/api/authService';
 import { toSupabaseFirmId } from '../../services/api/clientService';
 import { supabase } from '../../services/supabaseClient';
-import { invokeFunction } from '../../src/lib/api';
+import { invokeParseBankStatement } from '../../src/lib/api';
 import type { Client, Lead } from '../../types';
 import { LeadStatus } from '../../types';
 import { Button } from '../common/Button';
@@ -95,6 +95,7 @@ const AddClientSmart: React.FC<Props> = ({ onBack, onSuccess }) => {
 
   const [scanBusy, setScanBusy] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
+  const [scanParseProgress, setScanParseProgress] = useState<string | null>(null);
   const [idSession, setIdSession] = useState<{
     clientId: string;
     documentId: string;
@@ -165,6 +166,7 @@ const AddClientSmart: React.FC<Props> = ({ onBack, onSuccess }) => {
 
     setScanBusy(true);
     setScanError(null);
+    setScanParseProgress(null);
 
     const uuid = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
     let placeholderId: string | null = null;
@@ -209,13 +211,20 @@ const AddClientSmart: React.FC<Props> = ({ onBack, onSuccess }) => {
       const idScanFriendly =
         'ID scanning is being set up. Please use Manual Entry for now.';
 
-      const { data: parseOut, error: fnErr } = await invokeFunction<Record<string, unknown>>(
-        'parse-bank-statement',
+      const { data: parseOut, error: fnErr } = await invokeParseBankStatement(
         {
           document_id: docRow.id,
           firm_id: firmId,
         },
+        {
+          onProgress: (row) => {
+            const pct = Number(row.progress_pct) || 0;
+            setScanParseProgress(`${row.current_step || row.status || 'Processing'} · ${pct}%`);
+          },
+        },
       );
+
+      setScanParseProgress(null);
 
       if (fnErr) {
         setScanError(idScanFriendly);
@@ -250,6 +259,7 @@ const AddClientSmart: React.FC<Props> = ({ onBack, onSuccess }) => {
       toast.error(msg);
       if (placeholderId) await cleanupIdPlaceholder(placeholderId);
     } finally {
+      setScanParseProgress(null);
       setScanBusy(false);
     }
   };
@@ -592,7 +602,7 @@ const AddClientSmart: React.FC<Props> = ({ onBack, onSuccess }) => {
               <>
                 <Icon name="Loader" className="h-10 w-10 animate-spin text-primary-500 mb-2" />
                 <p className="text-sm m-0" style={{ color: 'var(--text-secondary)' }}>
-                  Uploading and parsing…
+                  {scanParseProgress ?? 'Uploading and parsing…'}
                 </p>
               </>
             ) : (

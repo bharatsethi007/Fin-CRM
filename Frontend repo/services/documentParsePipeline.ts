@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { invokeFunction } from '../src/lib/api';
+import { invokeParseBankStatement } from '../src/lib/api';
 
 /**
  * After a documents row is inserted, the DB trigger may enqueue `document_parse_queue`.
@@ -31,11 +31,14 @@ export function fireDocumentParseIfQueued(
 
     if (!queueRow?.id) return;
 
-    invokeFunction('parse-bank-statement', {
-      parse_queue_id: queueRow.id,
-      document_id: insertedDocumentId,
-      application_id: applicationId,
-      firm_id: firmId,
-    }).catch(console.error);
+    invokeParseBankStatement(
+      {
+        parse_queue_id: queueRow.id,
+        document_id: insertedDocumentId,
+        application_id: applicationId,
+        firm_id: firmId,
+      },
+      { wait: false },
+    ).catch(console.error);
   })();
 }

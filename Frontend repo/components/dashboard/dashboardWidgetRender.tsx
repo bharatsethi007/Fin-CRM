@@ -27,6 +27,9 @@ const STAGE_STYLES: Record<string, { bg: string; text: string }> = {
 
 const ALL_STAGES = ['draft', 'submitted', 'conditional', 'unconditional', 'settled', 'declined'] as const;
 
+/** Matches Tailwind `h-56` (14rem); Recharts needs a definite height, not only `height="100%"`. */
+const PIPELINE_CHART_HEIGHT_PX = 224;
+
 export interface DashboardWidgetParams {
   DS: {
     bg: string;
@@ -122,11 +125,11 @@ export function renderDashboardWidget(widgetId: WidgetId, p: DashboardWidgetPara
               <option value={12}>Last 12 months</option>
             </select>
           </div>
-          <div className="h-56 w-full">
+          <div className="h-56 w-full min-h-56">
             {p.loading ? (
               <div className="h-full w-full bg-slate-100 dark:bg-slate-700/40 rounded-xl animate-pulse" />
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height={PIPELINE_CHART_HEIGHT_PX}>
                 <LineChart data={p.appsOverTimeData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={p.chartGridColor} vertical={false} />
                   <XAxis dataKey="month" tick={{ fontSize: 11, fill: p.chartTextColor }} axisLine={false} tickLine={false} />

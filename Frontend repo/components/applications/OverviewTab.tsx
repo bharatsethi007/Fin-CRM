@@ -1,18 +1,31 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { logger } from '../../utils/logger';
 import { Button } from '../common/Button';
 import { Icon } from '../common/Icon';
 import { Card } from '../common/Card';
-import { applicationService, type Applicant } from '../../services/api';
+import { applicationService, type Applicant, type Company } from '../../services/api';
 import type { BankRates, AIRecommendationResponse } from '../../types';
 import { crmService, noteService, authService } from '../../services/api';
 import { supabase } from '../../services/supabaseClient';
 import { geminiService, type StatementOfAdviceResponse } from '../../services/geminiService';
-import { ReadinessScoreWidget } from '../applications/ReadinessScoreWidget';
 import { RiskPredictor } from './RiskPredictor';
-import { AnomalyFlagBanner } from './AnomalyFlagBanner';
-import { FullAdvicePanel } from '../applications/FullAdvicePanel';
+import ApplicantsTab from '../application/tabs/ApplicantsTab';
 import { useToast } from '../../hooks/useToast';
+import { GenerateSOAPopup } from '../soa/GenerateSOAPopup';
+import { PropertyInformationSection } from '@/components/deals/PropertyInformationSection';
+import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete';
+import { FieldWithAnomaly } from '@/components/ui/FieldWithAnomaly';
+import { SoaStatusCard } from '@/components/deals/SoaStatusCard';
+import { layerText } from '../soa/soaAgentUtils';
+import {
+  generateSoaHtml,
+  normalizeComparisonRows,
+  type SOAComparisonRow,
+  type SOAData,
+  type SoaPdfApplicationPropertyRow,
+  type SoaPdfClientDnaPayload,
+} from '@/lib/soaPdfTemplate';
 
 type ApplicationDetailRow = {
   id: string;
@@ -48,6 +61,22 @@ const WORKFLOW_STAGES = [
   { value: 'declined', label: 'Declined' },
 ] as const;
 
+/** Coerces DB / legacy values so `<select value>` always matches an `<option value>`. */
+function normalizeApplicationType(raw: string | null | undefined): (typeof APPLICATION_TYPES)[number] {
+  const v = String(raw ?? 'purchase').toLowerCase().trim();
+  return (APPLICATION_TYPES as readonly string[]).includes(v)
+    ? (v as (typeof APPLICATION_TYPES)[number])
+    : 'purchase';
+}
+
+/** Ensures workflow dropdown value is always a defined `WORKFLOW_STAGES` key. */
+function normalizeWorkflowStage(raw: string | null | undefined): (typeof WORKFLOW_STAGES)[number]['value'] {
+  const v = String(raw ?? 'draft').toLowerCase().trim();
+  return WORKFLOW_STAGES.some((s) => s.value === v)
+    ? (v as (typeof WORKFLOW_STAGES)[number]['value'])
+    : 'draft';
+}
+
 interface OverviewTabProps {
   application: any;
   client: any;
@@ -56,6 +85,88 @@ interface OverviewTabProps {
   advisorId?: string;
   /** Incremented from parent when notes should reload (e.g. Realtime). */
   notesRefreshTick?: number;
+}
+
+/** Maps applicant_type to a short sidebar badge label. */
+function applicantSidebarTypeLabel(applicantType: string): string {
+  const s = (applicantType || 'primary').toLowerCase();
+  if (s === 'secondary') return 'Secondary';
+  if (s === 'guarantor') return 'Guarantor';
+  return 'Primary';
+}
+
+/** Builds the display name shown on compact applicant tiles. */
+function applicantTileDisplayName(a: Applicant): string {
+  const parts = [a.title, a.first_name, a.middle_name, a.surname].filter(
+    (p): p is string => typeof p === 'string' && p.trim() !== '',
+  );
+  if (parts.length) {
+    return parts.map((p) => p.trim()).join(' ').replace(/\s+/g, ' ');
+  }
+  const pref = typeof a.preferred_name === 'string' ? a.preferred_name.trim() : '';
+  return pref || '—';
+}
+
+/** Display name for a company row in the overview sidebar. */
+function companyTileDisplayName(c: Company): string {
+  const entity = typeof c.entity_name === 'string' ? c.entity_name.trim() : '';
+  const trading = typeof (c as { trading_name?: string }).trading_name === 'string'
+    ? (c as { trading_name: string }).trading_name.trim()
+    : '';
+  return entity || trading || '—';
+}
+
+/** Badge label from company entity_type (Ltd, Trust, etc.). */
+function companySidebarTypeLabel(c: Company): string {
+  const t = typeof c.entity_type === 'string' ? c.entity_type.trim() : '';
+  return t || 'Company';
+}
+
+/** Resolves company contact phone for sidebar tiles. */
+function companyTilePhone(c: Company): string {
+  const v = (c as { contact_phone?: unknown }).contact_phone;
+  return typeof v === 'string' && v.trim() !== '' ? v : '—';
+}
+
+/** Resolves company contact email for sidebar tiles. */
+function companyTileEmail(c: Company): string {
+  const v = (c as { contact_email?: unknown }).contact_email;
+  return typeof v === 'string' && v.trim() !== '' ? v : '—';
+}
+
+/** Extracts lender comparison rows from stored quant matrix JSON for PDF export. */
+function comparisonFromQuantMatrix(quant: unknown): Record<string, unknown>[] | undefined {
+  if (quant == null || typeof quant !== 'object') return undefined;
+  const o = quant as Record<string, unknown>;
+  if (Array.isArray(o.comparison)) return o.comparison as Record<string, unknown>[];
+  if (Array.isArray(o.rows)) return o.rows as Record<string, unknown>[];
+  return undefined;
+}
+
+/** Placeholder comparison rows when live data has no structured matrix (print preview). */
+const SOA_PDF_DEMO_COMPARISON: SOAComparisonRow[] = [
+  { lender: 'BNZ', rate: 6.49, fiveYrCost: 313720, cashback: 0, flexibility: 'medium', isRecommended: true },
+  { lender: 'ASB', rate: 6.59, fiveYrCost: 317950, cashback: 3000, flexibility: 'high' },
+  { lender: 'Westpac', rate: 6.69, fiveYrCost: 321100, cashback: 0, flexibility: 'medium' },
+];
+
+/** Builds `layer7_risks` as string[] from mixed agent/jsonb shapes. */
+function soaPdfLayer7Risks(content: Record<string, unknown>): string[] | undefined {
+  const raw = content.layer7_risks;
+  if (Array.isArray(raw)) {
+    const list = raw.filter((x): x is string => typeof x === 'string' && x.trim() !== '').map((x) => x.trim());
+    return list.length ? list : undefined;
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    const list = raw
+      .split(/\n+/)
+      .map((l) => l.replace(/^\s*[-•*]\s*/, '').trim())
+      .filter(Boolean);
+    return list.length ? list : undefined;
+  }
+  const layer7 = content.layer7;
+  if (typeof layer7 === 'string' && layer7.trim()) return [layer7.trim()];
+  return undefined;
 }
 
 export const OverviewTab: React.FC<OverviewTabProps> = ({
@@ -68,7 +179,9 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
 }) => {
   const [detail, setDetail] = useState<ApplicationDetailRow | null>(null);
   const [loading, setLoading] = useState(true);
-  const [workflowStage, setWorkflowStage] = useState<string>(application.status?.toString() || 'draft');
+  const [workflowStage, setWorkflowStage] = useState<string>(() =>
+    normalizeWorkflowStage(application.status?.toString()),
+  );
   const [interestRates, setInterestRates] = useState<BankRates[]>([]);
   const [isLoadingRates, setIsLoadingRates] = useState(true);
   const [aiRecommendation, setAiRecommendation] = useState<AIRecommendationResponse | null>(null);
@@ -78,30 +191,23 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   const [savingLending, setSavingLending] = useState(false);
 
   const [loanAmountEdit, setLoanAmountEdit] = useState<string>('');
-  const [applicationTypeEdit, setApplicationTypeEdit] = useState<string>('purchase');
+  const [applicationTypeEdit, setApplicationTypeEdit] = useState<string>(() =>
+    normalizeApplicationType(
+      (application as { application_type?: string | null }).application_type ??
+        (application as { applicationType?: string | null }).applicationType,
+    ),
+  );
   const [loanPurposeEdit, setLoanPurposeEdit] = useState<string>('');
   const [loanTermYearsEdit, setLoanTermYearsEdit] = useState<string>('30');
   const [interestRateEdit, setInterestRateEdit] = useState<string>('');
   const [lenderNameEdit, setLenderNameEdit] = useState<string>('');
   const [propertyAddressEdit, setPropertyAddressEdit] = useState<string>('');
   const [propertyValueEdit, setPropertyValueEdit] = useState<string>('');
+  const [propertyRefresh, setPropertyRefresh] = useState(0);
 
-  const [propSearchTerm, setPropSearchTerm] = useState('');
-  const [propSearchResults, setPropSearchResults] = useState<any[]>([]);
-  const [propSearching, setPropSearching] = useState(false);
-  const [propAddress, setPropAddress] = useState('');
-  const [propSuburb, setPropSuburb] = useState('');
-  const [propCity, setPropCity] = useState('');
-  const [propRegion, setPropRegion] = useState('');
-  const [propPostcode, setPropPostcode] = useState('');
-  const [propType, setPropType] = useState('');
-  const [propZoning, setPropZoning] = useState('');
-  const [propCV, setPropCV] = useState<number | ''>('');
-  const [propValuationType, setPropValuationType] = useState('');
-  const [propLandArea, setPropLandArea] = useState<number | ''>('');
-  const [propTitleNumber, setPropTitleNumber] = useState('');
-  const [propLegalDesc, setPropLegalDesc] = useState('');
-  const [propSaving, setPropSaving] = useState(false);
+  const [showApplicantsManager, setShowApplicantsManager] = useState(false);
+  const [sidebarCompanies, setSidebarCompanies] = useState<Company[]>([]);
+  const [sidebarPartiesRefreshKey, setSidebarPartiesRefreshKey] = useState(0);
 
   const [financials, setFinancials] = useState({
     income: client.financials?.income ?? 0,
@@ -111,10 +217,196 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     netPosition: (client.financials?.assets ?? 0) - (client.financials?.liabilities ?? 0),
   });
 
+  const [expenses, setExpenses] = useState(() =>
+    client.financials?.expenses != null ? String(Math.round(client.financials.expenses)) : '',
+  );
+
   const [applicantsForAdvice, setApplicantsForAdvice] = useState<Applicant[]>([]);
 
-  const [adviceSummaryLoading, setAdviceSummaryLoading] = useState(false);
-  const [adviceSummaryError, setAdviceSummaryError] = useState<string | null>(null);
+  const [showGeneratePopup, setShowGeneratePopup] = useState(false);
+  const [showSoaEditor, setShowSoaEditor] = useState(false);
+
+  const deal = application;
+  const applicationId = deal?.id ?? '';
+
+  const SOA_CARD_SELECT =
+    'id, status, version, updated_at, created_at, adviser_lender_name, layer_client_situation, layer_regulatory_gate, layer_market_scan, layer_quant_matrix, layer_recommendation, layer_sensitivity, layer_risks, layer_commission';
+
+  const { data: approvedSoa } = useQuery({
+    queryKey: ['approved-soa', applicationId],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('soas')
+        .select(SOA_CARD_SELECT)
+        .eq('application_id', applicationId)
+        .eq('status', 'adviser_review')
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      return data;
+    },
+    enabled: !!applicationId,
+  });
+
+  const { data: existingSoa } = useQuery({
+    queryKey: ['existing-soa', applicationId],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('soas')
+        .select(SOA_CARD_SELECT)
+        .eq('application_id', applicationId)
+        .neq('status', 'adviser_review')
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      return data;
+    },
+    enabled: !!applicationId,
+  });
+
+  const soaData = useMemo(() => {
+    const row = (approvedSoa ?? existingSoa) as Record<string, unknown> | null | undefined;
+    if (!row?.id) return null;
+    const approved = row.status === 'adviser_review';
+    const quant = row.layer_quant_matrix;
+    const comparison = comparisonFromQuantMatrix(quant);
+    const content: Record<string, unknown> = {
+      layer1_client_situation: layerText(row.layer_client_situation),
+      layer2_regulatory_gate: layerText(row.layer_regulatory_gate),
+      layer3_market_scan: layerText(row.layer_market_scan),
+      layer4_quantitative: layerText(quant),
+      layer5_recommendation: layerText(row.layer_recommendation),
+      layer6_sensitivity: layerText(row.layer_sensitivity),
+      layer7_risks: layerText(row.layer_risks),
+      layer8_commission: layerText(row.layer_commission),
+    };
+    if (comparison?.length) content.comparison = comparison;
+    return {
+      id: String(row.id),
+      status: approved ? 'final' : typeof row.status === 'string' ? row.status : 'draft',
+      version: typeof row.version === 'number' ? row.version : 1,
+      updated_at: row.updated_at as string | null,
+      created_at: row.created_at as string | null | undefined,
+      recommended_lender: typeof row.adviser_lender_name === 'string' ? row.adviser_lender_name : '',
+      content,
+    };
+  }, [approvedSoa, existingSoa]);
+
+  /** Renders SOA HTML in a new window and triggers print (avoids Radix dialog print issues). */
+  const handleExportPdf = useCallback(async () => {
+    if (!soaData) {
+      toast.error('No SOA to export');
+      return;
+    }
+    const soa = soaData;
+    const c = soa.content as Record<string, unknown>;
+    const adviser = authService.getCurrentUser() as {
+      name?: string;
+      full_name?: string;
+      fsp_number?: string;
+    } | null;
+
+    const clientFirst = (client as { first_name?: string })?.first_name ?? 'Blair';
+    const clientLast = (client as { last_name?: string })?.last_name ?? 'Matthews';
+    const clientName =
+      client?.name?.trim?.() ||
+      [client?.first_name, client?.last_name].filter(Boolean).join(' ').trim() ||
+      `${clientFirst} ${clientLast}`.trim();
+
+    const dealRef =
+      (application as { referenceNumber?: string; reference_number?: string }).referenceNumber ??
+      (application as { reference_number?: string }).reference_number ??
+      'AF-20260329-0017';
+
+    const str = (v: unknown): string | undefined =>
+      typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined;
+
+    let clientDna: SoaPdfClientDnaPayload = null;
+    let applicationProperties: SoaPdfApplicationPropertyRow[] = [];
+    if (applicationId) {
+      const { data: dnaRow, error: dnaErr } = await supabase
+        .from('soa_client_dna')
+        .select('analysis')
+        .eq('deal_id', applicationId)
+        .maybeSingle();
+      if (dnaErr) {
+        logger.log('SOA PDF: soa_client_dna not loaded', dnaErr.message ?? String(dnaErr));
+      } else if (dnaRow?.analysis != null) {
+        clientDna = { analysis: dnaRow.analysis };
+      }
+
+      const { data: propRows, error: propErr } = await supabase
+        .from('application_properties')
+        .select('*')
+        .eq('application_id', applicationId);
+      if (propErr) {
+        logger.log('SOA PDF: application_properties not loaded', propErr.message ?? String(propErr));
+      } else {
+        applicationProperties = (propRows ?? []) as SoaPdfApplicationPropertyRow[];
+      }
+    }
+
+    const comparisonRaw = Array.isArray(c.comparison) ? (c.comparison as Record<string, unknown>[]) : [];
+    let layer4Quant: SOAComparisonRow[] =
+      comparisonRaw.length > 0 ? normalizeComparisonRows(comparisonRaw) : [];
+
+    const legacyL4 = c.layer4_quantitative;
+    if (layer4Quant.length === 0 && Array.isArray(legacyL4)) {
+      layer4Quant = legacyL4 as SOAComparisonRow[];
+    }
+    if (layer4Quant.length === 0) {
+      layer4Quant = SOA_PDF_DEMO_COMPARISON;
+    }
+
+    const soaPdfPayload: SOAData = {
+      id: soa.id,
+      version: soa.version || 1,
+      status: soa.status === 'final' || soa.status === 'adviser_review' ? 'final' : 'draft',
+      client: {
+        name: clientName,
+        email: (client as { email?: string })?.email,
+      },
+      dealRef,
+      date: (soa.updated_at as string) || new Date().toISOString(),
+      adviserName: adviser?.full_name || adviser?.name || 'Super Admin',
+      adviserFSP: adviser?.fsp_number,
+      recommendedLender: soa.recommended_lender,
+      content: {
+        layer1_client_situation: str(c.layer1_client_situation) || str(c.layer1),
+        layer2_regulatory_gate: str(c.layer2_regulatory_gate) || str(c.layer2),
+        layer3_market_scan: str(c.layer3_market_scan) || str(c.layer3),
+        layer4_quantitative: layer4Quant,
+        layer5_recommendation: str(c.layer5_recommendation) || str(c.layer5),
+        layer6_sensitivity: str(c.layer6_sensitivity) || str(c.layer6),
+        layer7_risks: soaPdfLayer7Risks(c),
+        layer8_commission: str(c.layer8_commission) || str(c.layer8),
+      },
+      tenantBrand: {
+        name: 'Kiwi Mortgages',
+        primaryColor: '#2563eb',
+      },
+      clientDna,
+      applicationProperties,
+      staticMapsApiKey:
+        typeof import.meta.env.VITE_GOOGLE_MAPS_KEY === 'string'
+          ? import.meta.env.VITE_GOOGLE_MAPS_KEY
+          : undefined,
+    };
+
+    const html = generateSoaHtml(soaPdfPayload);
+    const printWindow = window.open('', '_blank', 'width=1000,height=1200,scrollbars=yes');
+    if (!printWindow) {
+      toast.error('Popup blocked — allow popups to export PDF');
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    window.setTimeout(() => {
+      printWindow.print();
+    }, 1000);
+  }, [application, client, soaData, toast]);
   const [showAdviceReviewModal, setShowAdviceReviewModal] = useState(false);
   const [adviceReview, setAdviceReview] = useState<StatementOfAdviceResponse | null>(null);
 
@@ -123,31 +415,11 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   const [newNoteText, setNewNoteText] = useState('');
   const [addingNote, setAddingNote] = useState(false);
 
-  const [propertySearchTerm, setPropertySearchTerm] = useState('');
-  const [propertySearchResults, setPropertySearchResults] = useState<any[]>([]);
-  const [propertySearching, setPropertySearching] = useState(false);
-  const [propertyAddress, setPropertyAddress] = useState(application?.property_address || '');
-  const [propertySuburb, setPropertySuburb] = useState(application?.property_suburb || '');
-  const [propertyCity, setPropertyCity] = useState(application?.property_city || '');
-  const [propertyRegion, setPropertyRegion] = useState(application?.property_region || '');
-  const [propertyPostcode, setPropertyPostcode] = useState(application?.property_postcode || '');
-  const [propertyType, setPropertyType] = useState(application?.property_type || '');
-  const [zoning, setZoning] = useState(application?.zoning || '');
-  const [propertyValue, setPropertyValue] = useState<number | ''>(
-    application?.property_value ? Number(application.property_value) : ''
-  );
-  const [valuationType, setValuationType] = useState(application?.valuation_type || '');
-  const [landArea, setLandArea] = useState<number | ''>(
-    application?.land_area_m2 ? Number(application.land_area_m2) : ''
-  );
-  const [titleNumber, setTitleNumber] = useState(application?.title_number || '');
-  const [legalDescription, setLegalDescription] = useState(application?.legal_description || '');
-
   // Sync loan edit fields from detail
   useEffect(() => {
     if (detail) {
       setLoanAmountEdit(detail.loan_amount != null ? String(detail.loan_amount) : '');
-      setApplicationTypeEdit(detail.application_type || 'purchase');
+      setApplicationTypeEdit(normalizeApplicationType(detail.application_type));
       setLoanPurposeEdit(detail.loan_purpose || '');
       setLoanTermYearsEdit(detail.loan_term_years != null ? String(detail.loan_term_years) : '30');
       setInterestRateEdit(detail.interest_rate != null ? String(detail.interest_rate) : '');
@@ -216,6 +488,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             liabilities: totalLiabilities,
             netPosition,
           });
+          setExpenses(totalExpensesAnnual ? String(Math.round(totalExpensesAnnual)) : '');
         }
       } catch (err) {
         logger.error('Failed to compute financial summary:', err);
@@ -228,14 +501,23 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     };
   }, [application.id]);
 
-  // Load applicants for advice on mount
+  // Load applicants + companies for sidebar and advice payloads (matches ApplicantsTab dual-fetch)
   useEffect(() => {
-    if (application.id) {
-      applicationService.getApplicants(application.id)
-        .then((data) => setApplicantsForAdvice(data || []))
-        .catch(() => setApplicantsForAdvice([]));
-    }
-  }, [application.id]);
+    if (!application.id) return;
+    Promise.all([
+      applicationService.getApplicants(application.id),
+      applicationService.getCompanies(application.id),
+    ])
+      .then(([applicantsData, companiesData]) => {
+        setApplicantsForAdvice(applicantsData || []);
+        setSidebarCompanies(companiesData || []);
+      })
+      .catch((err) => {
+        logger.error('Failed to load applicants/companies for overview:', err);
+        setApplicantsForAdvice([]);
+        setSidebarCompanies([]);
+      });
+  }, [application.id, sidebarPartiesRefreshKey]);
 
   // Load application notes on mount and when parent signals refresh (Realtime)
   useEffect(() => {
@@ -258,8 +540,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       .then((data) => {
         if (!cancelled) {
           setDetail(data as ApplicationDetailRow);
-          const stage = (data as ApplicationDetailRow)?.workflow_stage || 'draft';
-          setWorkflowStage(String(stage).toLowerCase());
+          setWorkflowStage(normalizeWorkflowStage((data as ApplicationDetailRow)?.workflow_stage));
         }
       })
       .catch((err) => {
@@ -282,37 +563,6 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       .catch(() => setInterestRates([]))
       .finally(() => setIsLoadingRates(false));
   }, []);
-
-  // Property search term debounce (propertySearchTerm)
-  useEffect(() => {
-    if (propertySearchTerm.length < 3) {
-      setPropertySearchResults([]);
-      return;
-    }
-    const timer = setTimeout(() => {
-      handleSearchProperty();
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [propertySearchTerm]);
-
-  // Click-outside handler for property-search-container
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.property-search-container')) {
-        setPropertySearchResults([]);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  // propSearchTerm debounce
-  useEffect(() => {
-    if (propSearchTerm.length < 3) { setPropSearchResults([]); return; }
-    const t = setTimeout(handlePropSearch, 400);
-    return () => clearTimeout(t);
-  }, [propSearchTerm]);
 
   const fetchRecommendation = async () => {
     if (interestRates.length === 0) return;
@@ -384,23 +634,6 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       property_suburb_region: propertySuburbRegion,
     };
     return JSON.stringify(payload, null, 2);
-  };
-
-  const handleGenerateAdviceSummary = async () => {
-    setAdviceSummaryLoading(true);
-    setAdviceSummaryError(null);
-    try {
-      const sanitised = getSanitisedDataForAdvice();
-      const result = await geminiService.generateStatementOfAdvice(sanitised);
-      setAdviceReview({ ...result });
-      setShowAdviceReviewModal(true);
-    } catch (err) {
-      setAdviceSummaryError(
-        err instanceof Error ? err.message : 'Could not generate summary. Set GEMINI_API_KEY in Supabase Edge Function secrets (gemini-proxy).'
-      );
-    } finally {
-      setAdviceSummaryLoading(false);
-    }
   };
 
   const handleApproveAdviceSave = async () => {
@@ -551,9 +784,69 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     }
   };
 
-  const clientName = detail?.clients
-    ? [detail.clients.first_name, detail.clients.last_name].filter(Boolean).join(' ').trim() || client.name
-    : client.name;
+  const handleLendingPropertyAddressSelect = useCallback(
+    async (address: string) => {
+      const id = application.id?.trim();
+      if (!id) return;
+      logger.log('Address selected:', address);
+      setPropertyAddressEdit(address);
+      try {
+        const { error: delErr } = await supabase
+          .from('application_properties')
+          .delete()
+          .eq('application_id', id);
+        if (delErr) {
+          logger.error('OverviewTab: delete application_properties', delErr);
+          toast.error(delErr.message || 'Could not clear existing property');
+          return;
+        }
+
+        const { data: prop, error: insertError } = await supabase
+          .from('application_properties')
+          .insert({
+            application_id: id,
+            address_full: address,
+            address_normalized: address,
+            is_primary: true,
+          })
+          .select()
+          .single();
+
+        if (insertError) {
+          logger.error('Insert failed:', insertError);
+          toast.error(insertError.message || 'Could not save property');
+          return;
+        }
+        if (!prop?.id) {
+          toast.error('Property insert returned no row');
+          return;
+        }
+
+        logger.log('Property inserted:', prop.id);
+
+        const { data: enrichData, error: enrichError } = await supabase.functions.invoke('enrich-property', {
+          body: { propertyId: prop.id, address },
+        });
+
+        logger.log('Enrich result:', enrichData, enrichError);
+
+        if (enrichError) {
+          toast.error(enrichError.message || 'Enrichment request failed');
+        } else {
+          toast.success('Enriching property from LINZ…');
+        }
+
+        await applicationService.updateApplication(id, { property_address: address || null });
+        setDetail((d) => (d ? { ...d, property_address: address || null } : null));
+        setPropertyRefresh(Date.now());
+        onUpdate();
+      } catch (e: unknown) {
+        logger.error('OverviewTab: lending property address select', e);
+        toast.error(e instanceof Error ? e.message : 'Could not save property address');
+      }
+    },
+    [application.id, onUpdate, toast],
+  );
 
   const loanAmountNum = loanAmountEdit !== '' ? Number(loanAmountEdit) : (detail?.loan_amount != null ? Number(detail.loan_amount) : application.loanAmount ?? 0);
   const propertyValueNum = propertyValueEdit !== '' ? Number(propertyValueEdit) : (detail?.property_value != null ? Number(detail.property_value) : null);
@@ -561,138 +854,6 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     propertyValueNum != null && propertyValueNum > 0 && loanAmountNum > 0
       ? `${((loanAmountNum / propertyValueNum) * 100).toFixed(1)}%`
       : '—';
-
-  const handleSearchProperty = async () => {
-    if (!propertySearchTerm.trim()) return;
-    setPropertySearching(true);
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
-        propertySearchTerm
-      )}&countrycodes=nz&format=json&addressdetails=1&limit=10`;
-      const res = await fetch(url, {
-        headers: { 'User-Agent': 'AdvisorFlow-CRM/1.0' },
-      });
-      const results = await res.json();
-      setPropertySearchResults(results || []);
-    } catch (err) {
-      logger.error('Nominatim search error:', err);
-    } finally {
-      setPropertySearching(false);
-    }
-  };
-
-  const handleSelectProperty = (row: any) => {
-    const addr = row.display_name || '';
-    const parts = row.address || {};
-    setPropertyAddress(addr);
-    setPropertySuburb(parts.suburb || parts.neighbourhood || parts.hamlet || '');
-    setPropertyCity(parts.city || parts.town || parts.village || '');
-    setPropertyRegion(parts.state || parts.region || '');
-    setPropertyPostcode(parts.postcode || '');
-    setPropertySearchResults([]);
-    setPropertySearchTerm(addr);
-  };
-
-  const handleSaveProperty = async () => {
-    try {
-      await applicationService.updateApplication(application.id, {
-        property_address: propertyAddress,
-        property_suburb: propertySuburb,
-        property_city: propertyCity,
-        property_region: propertyRegion,
-        property_postcode: propertyPostcode,
-        property_type: propertyType,
-        zoning: zoning,
-      property_value: propertyValue === '' ? null : Number(propertyValue),
-      valuation_type: valuationType,
-      land_area_m2: landArea === '' ? null : Number(landArea),
-      title_number: titleNumber,
-      legal_description: legalDescription,
-      });
-      toast.success('Property details saved');
-      const updated = (await applicationService.getApplicationById(application.id)) as ApplicationDetailRow;
-      setDetail(updated);
-      onUpdate();
-    } catch (err) {
-      logger.error('Save error:', err);
-      toast.error('Failed to save property details');
-    }
-  };
-
-  const handlePropSearch = async () => {
-    if (propSearchTerm.length < 3) return;
-    setPropSearching(true);
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
-        propSearchTerm
-      )}&countrycodes=nz&format=json&addressdetails=1&limit=8`;
-      const res = await fetch(url, { headers: { 'User-Agent': 'AdvisorFlow-CRM/1.0' } });
-      const data = await res.json();
-      setPropSearchResults(data);
-    } catch (e) {
-      logger.error('Search error:', e);
-    } finally {
-      setPropSearching(false);
-    }
-  };
-
-  const handlePropSelect = async (row: any) => {
-    const a = row.address || {};
-    setPropAddress(row.display_name || '');
-    setPropSearchTerm(row.display_name || '');
-    setPropSuburb(a.suburb || a.neighbourhood || '');
-    setPropCity(a.city || a.town || a.village || '');
-    setPropRegion(a.state || '');
-    setPropPostcode(a.postcode || '');
-    setPropSearchResults([]);
-
-    // LINZ title lookup for CV / title / land area
-    if (row.lat && row.lon && import.meta.env.VITE_LINZ_API_KEY) {
-      try {
-        const linzUrl = `https://data.linz.govt.nz/services/query/v1/vector.json?key=${import.meta.env.VITE_LINZ_API_KEY}&layer=50804&x=${row.lon}&y=${row.lat}&max_results=1&radius=100&geometry=true&with_field_names=true`;
-        const linzRes = await fetch(linzUrl);
-        const linzData = await linzRes.json();
-        const feature = linzData?.vectorQuery?.layers?.['50804']?.features?.[0];
-        if (feature) {
-          const props = feature.properties || {};
-          setPropTitleNumber(props?.title_no || props?.id || '');
-          setPropLandArea(props?.land_area ? Number(props.land_area) : '');
-          setPropLegalDesc(props?.legal_description || props?.title_no || '');
-        }
-      } catch (e) {
-        logger.log('LINZ title lookup failed:', e);
-      }
-    }
-  };
-
-  const handlePropSave = async () => {
-    setPropSaving(true);
-    try {
-      await applicationService.updateApplication(application.id, {
-        property_address: propAddress || null,
-        property_suburb: propSuburb || null,
-        property_city: propCity || null,
-        property_region: propRegion || null,
-        property_postcode: propPostcode || null,
-        property_type: propType || null,
-        zoning: propZoning || null,
-        property_value: propCV === '' ? null : Number(propCV),
-        valuation_type: propValuationType || null,
-        land_area_m2: propLandArea === '' ? null : Number(propLandArea),
-        title_number: propTitleNumber || null,
-        legal_description: propLegalDesc || null,
-      });
-      toast.success('Property details saved');
-      const updated = (await applicationService.getApplicationById(application.id)) as ApplicationDetailRow;
-      setDetail(updated);
-      onUpdate();
-    } catch (e) {
-      logger.error('Save error:', e);
-      toast.error('Failed to save property details');
-    } finally {
-      setPropSaving(false);
-    }
-  };
 
   if (loading) {
     return (
@@ -707,26 +868,12 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   return (
     <>
       <div className="mb-6">
-        <ReadinessScoreWidget applicationId={application.id} />
-      </div>
-      <div className="mb-6">
         <RiskPredictor applicationId={application.id} firmId={firmId} />
-      </div>
-      <div className="mb-6">
-        <AnomalyFlagBanner applicationId={application.id} />
-      </div>
-      <div className="mb-6">
-        <FullAdvicePanel
-          applicationId={application.id}
-          firmId={application.firm_id}
-          advisorId={advisorId}
-          onComplete={() => { /* optionally refresh readiness */ }}
-        />
       </div>
       <div className="space-y-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left: Lending Details */}
-          <div className="lg:col-span-2">
+          {/* Left: Lending Details → Property → Notes */}
+          <div className="lg:col-span-2 space-y-6">
             <Card className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Lending Details</h3>
               <div className="space-y-4">
@@ -799,13 +946,21 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">Property Address</label>
-                  <input
-                    type="text"
+                  <label
+                    className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400"
+                    htmlFor="lending-property-address"
+                  >
+                    Property Address
+                  </label>
+                  <AddressAutocomplete
+                    id="lending-property-address"
                     value={propertyAddressEdit}
-                    onChange={(e) => setPropertyAddressEdit(e.target.value)}
+                    onValueChange={setPropertyAddressEdit}
+                    onSelect={(addr) => {
+                      void handleLendingPropertyAddressSelect(addr);
+                    }}
+                    placeholder="64 Manukau Road, Epsom, Auckland"
                     className={inputClasses}
-                    placeholder="e.g. 12 Main St"
                   />
                 </div>
                 <div>
@@ -827,26 +982,6 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
               </div>
               <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 flex flex-wrap items-center gap-3">
                 <Button onClick={handleSaveLendingDetails} isLoading={savingLending}>Save Changes</Button>
-                <div className={`ai-button-wrapper${adviceSummaryLoading ? ' loading' : ''}`}>
-                  <button
-                    type="button"
-                    className="ai-button-inner bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 rounded-md"
-                    onClick={handleGenerateAdviceSummary}
-                    disabled={adviceSummaryLoading}
-                  >
-                    {adviceSummaryLoading ? (
-                      <>
-                        <Icon name="Loader" className="h-4 w-4 animate-spin flex-shrink-0" />
-                        <span>AI is generating your advice summary...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Icon name="Sparkles" className="h-4 w-4 flex-shrink-0" />
-                        <span>Generate Advice Summary</span>
-                      </>
-                    )}
-                  </button>
-                </div>
                 <div className="ai-button-wrapper">
                   <button
                     type="button"
@@ -858,29 +993,129 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                   </button>
                 </div>
               </div>
-              {adviceSummaryError && (
-                <p className="mt-4 text-sm text-red-600 dark:text-red-400">{adviceSummaryError}</p>
-              )}
             </Card>
+
+            <div className="mt-6">
+              <h2 className="mb-3 text-base font-semibold text-slate-900 dark:text-white">Property Information</h2>
+              <PropertyInformationSection
+                applicationId={deal.id}
+                refreshKey={propertyRefresh}
+              />
+            </div>
+
+            {/* Application Notes */}
+            <Card className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700" style={{ maxWidth: '720px' }}>
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Notes</h3>
+              {applicationNotesLoading ? (
+                <div className="flex items-center gap-2 py-6 text-gray-500 dark:text-gray-400">
+                  <Icon name="Loader" className="h-5 w-5 animate-spin" />
+                  <span className="text-sm">Loading notes...</span>
+                </div>
+              ) : applicationNotes.length === 0 ? (
+                <p className="text-sm text-gray-500 dark:text-gray-400 py-4">No notes yet. Add one below.</p>
+              ) : (
+                <div className="space-y-4 mb-6">
+                  {applicationNotes.map((note) => (
+                    <div
+                      key={note.id}
+                      className="rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/50 p-4"
+                    >
+                      <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 mb-2">
+                        <span className="font-medium text-gray-900 dark:text-white">{note.authorName}</span>
+                        <span>·</span>
+                        <span>{note.createdAt ? new Date(note.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—'}</span>
+                      </div>
+                      <div className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{note.content}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <form onSubmit={handleAddNote} className="space-y-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                <textarea
+                  value={newNoteText}
+                  onChange={(e) => setNewNoteText(e.target.value)}
+                  placeholder="Add a note..."
+                  rows={3}
+                  className={inputClasses}
+                />
+                <Button type="submit" disabled={addingNote || !newNoteText.trim()} isLoading={addingNote}>
+                  Add Note
+                </Button>
+              </form>
+            </Card>
+
           </div>
 
           {/* Right: Sidebar */}
           <div className="space-y-4">
             <Card className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Client details</h3>
-              <div className="space-y-2 text-sm">
-                <div className="flex items-center gap-2">
-                  <Icon name="User" className="h-4 w-4 text-gray-400 dark:text-gray-500 flex-shrink-0" />
-                  <span className="font-medium text-gray-900 dark:text-gray-100">{clientName}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Icon name="Mail" className="h-4 w-4 text-gray-400 dark:text-gray-500 flex-shrink-0" />
-                  <span className="text-gray-700 dark:text-gray-300">{client.email || '—'}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Icon name="Phone" className="h-4 w-4 text-gray-400 dark:text-gray-500 flex-shrink-0" />
-                  <span className="text-gray-700 dark:text-gray-300">{client.phone || '—'}</span>
-                </div>
+              <div className="flex items-center justify-between gap-2 mb-4">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Applicants</h3>
+                <button
+                  type="button"
+                  onClick={() => setShowApplicantsManager(true)}
+                  className="inline-flex items-center justify-center rounded-md p-1.5 text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/30 border border-transparent hover:border-primary-200 dark:hover:border-primary-800"
+                  aria-label="Add or manage applicants"
+                >
+                  <Icon name="Plus" className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="flex flex-col gap-2">
+                {applicantsForAdvice.length === 0 && sidebarCompanies.length === 0 ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400">No applicants or companies yet. Use + to add.</p>
+                ) : (
+                  <>
+                    {applicantsForAdvice.map((a) => (
+                      <div
+                        key={`applicant-${a.id}`}
+                        className="rounded-lg border border-gray-200 dark:border-gray-600 bg-white/60 dark:bg-gray-900/40 px-3 py-2 text-sm"
+                      >
+                        <div className="flex items-start justify-between gap-2 mb-1">
+                          <span className="font-medium text-gray-900 dark:text-gray-100 truncate min-w-0">
+                            {applicantTileDisplayName(a)}
+                          </span>
+                          <span className="flex-shrink-0 text-[10px] font-semibold text-primary-700 dark:text-primary-300 bg-primary-100 dark:bg-primary-900/50 px-1.5 py-0.5 rounded">
+                            {applicantSidebarTypeLabel(a.applicant_type)}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
+                          <Icon name="Phone" className="h-3 w-3 flex-shrink-0 opacity-70" />
+                          <span className="truncate">{a.mobile_phone || '—'}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 mt-0.5">
+                          <Icon name="Mail" className="h-3 w-3 flex-shrink-0 opacity-70" />
+                          <span className="truncate">{a.email_primary || '—'}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {sidebarCompanies.map((co) => (
+                      <div
+                        key={`company-${co.id}`}
+                        className="rounded-lg border border-gray-200 dark:border-gray-600 bg-white/60 dark:bg-gray-900/40 px-3 py-2 text-sm"
+                      >
+                        <div className="flex items-start justify-between gap-2 mb-1">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <Icon name="Building2" className="h-3.5 w-3.5 flex-shrink-0 text-gray-500 dark:text-gray-400" />
+                            <span className="font-medium text-gray-900 dark:text-gray-100 truncate">
+                              {companyTileDisplayName(co)}
+                            </span>
+                          </div>
+                          <span className="flex-shrink-0 text-[10px] font-semibold text-primary-700 dark:text-primary-300 bg-primary-100 dark:bg-primary-900/50 px-1.5 py-0.5 rounded">
+                            {companySidebarTypeLabel(co)}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
+                          <Icon name="Phone" className="h-3 w-3 flex-shrink-0 opacity-70" />
+                          <span className="truncate">{companyTilePhone(co)}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 mt-0.5">
+                          <Icon name="Mail" className="h-3 w-3 flex-shrink-0 opacity-70" />
+                          <span className="truncate">{companyTileEmail(co)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
               </div>
             </Card>
 
@@ -893,12 +1128,28 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                     ${financials.income.toLocaleString()}
                   </span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600 dark:text-gray-400">Total expenses (annual)</span>
-                  <span className="font-medium text-gray-900 dark:text-white">
-                    ${financials.expenses.toLocaleString()}
-                  </span>
-                </div>
+                <FieldWithAnomaly
+                  label="TOTAL EXPENSES (ANNUAL)"
+                  anomaly={{
+                    message: 'Below HEM benchmark',
+                    detail:
+                      '$9,095 vs expected ~$40,800 for couple with 1 dependant. Lenders will use HEM.',
+                  }}
+                  helperText="Using HEM $3,400/mo for servicing"
+                >
+                  <input
+                    type="text"
+                    value={expenses}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setExpenses(v);
+                      const n = Number(String(v).replace(/[^0-9.]/g, '')) || 0;
+                      setFinancials((f) => ({ ...f, expenses: n }));
+                    }}
+                    className="w-full rounded-md border-0 bg-amber-50/50 px-3 py-2.5 text-sm transition-colors focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 dark:bg-amber-950/25 dark:text-gray-100 dark:focus:bg-gray-900"
+                    placeholder="$0.00"
+                  />
+                </FieldWithAnomaly>
                 <div className="flex justify-between">
                   <span className="text-gray-600 dark:text-gray-400">Total assets</span>
                   <span className="font-medium text-gray-900 dark:text-white">
@@ -926,6 +1177,22 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
               </div>
             </Card>
 
+            <div className="mb-4">
+              <SoaStatusCard
+                soa={soaData}
+                onView={() => setShowSoaEditor(true)}
+                onExportPdf={() => void handleExportPdf()}
+                onRegenerate={() => {
+                  setShowSoaEditor(false);
+                  setShowGeneratePopup(true);
+                }}
+                onGenerate={() => {
+                  setShowSoaEditor(false);
+                  setShowGeneratePopup(true);
+                }}
+              />
+            </div>
+
             <Card className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Workflow stage</h3>
               <select
@@ -941,232 +1208,25 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
         </div>
         </div>
 
-        {/* Property Information */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2">
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 property-search-container relative">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Property Information</h3>
-          <div className="flex gap-2 mb-4">
-            <input
-              type="text"
-              value={propertySearchTerm}
-              onChange={e => setPropertySearchTerm(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleSearchProperty()}
-              placeholder="Start typing a NZ property address..."
-              className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
-            />
-            <button
-              onClick={handleSearchProperty}
-              disabled={propertySearching}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-            >
-              {propertySearching ? 'Searching...' : 'Search'}
-            </button>
-            {propertySearching && (
-              <Icon name="Loader" className="h-4 w-4 animate-spin text-blue-500 ml-2" />
-            )}
-          </div>
-          {propertySearchResults.length > 0 && (
-            <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-60 overflow-y-auto">
-              {propertySearchResults.map((row: any, i: number) => (
-                <div
-                  key={i}
-                  onClick={() => handleSelectProperty(row)}
-                  className="px-4 py-3 text-sm cursor-pointer hover:bg-blue-50 dark:hover:bg-gray-700 border-b border-gray-100 dark:border-gray-700 last:border-0"
-                >
-                  <div className="font-medium text-gray-900 dark:text-white">
-                    {row.display_name?.split(',')[0]}
-                  </div>
-                  <div className="text-xs text-gray-400 mt-0.5">{row.display_name}</div>
-                </div>
-              ))}
-              {propertySearchResults.length === 0 && !propertySearching && (
-                <div className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
-                  No results found
-                </div>
-              )}
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-2">
-              <label className="text-xs font-medium text-gray-500 uppercase">Property Address</label>
-              <input
-                value={propertyAddress}
-                onChange={e => setPropertyAddress(e.target.value)}
-                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase">Suburb</label>
-              <input
-                value={propertySuburb}
-                onChange={e => setPropertySuburb(e.target.value)}
-                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase">City</label>
-              <input
-                value={propertyCity}
-                onChange={e => setPropertyCity(e.target.value)}
-                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase">Region</label>
-              <input
-                value={propertyRegion}
-                onChange={e => setPropertyRegion(e.target.value)}
-                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase">Postcode</label>
-              <input
-                value={propertyPostcode}
-                onChange={e => setPropertyPostcode(e.target.value)}
-                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase">Property Type</label>
-              <select
-                value={propertyType}
-                onChange={e => setPropertyType(e.target.value)}
-                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
-              >
-                <option value="">Select...</option>
-                <option>House and Land</option>
-                <option>Apartment/Unit/Flat</option>
-                <option>Townhouse</option>
-                <option>Section/Land</option>
-                <option>Commercial</option>
-                <option>Rural</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase">Zoning</label>
-              <select
-                value={zoning}
-                onChange={e => setZoning(e.target.value)}
-                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
-              >
-                <option value="">Select...</option>
-                <option>Residential</option>
-                <option>Investment</option>
-                <option>Commercial</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase">Property Value / CV</label>
-              <input
-                type="number"
-                value={propertyValue}
-                onChange={e => setPropertyValue(e.target.value === '' ? '' : Number(e.target.value))}
-                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
-              />
-              <p className="mt-1 text-[11px] text-gray-400">
-                Enter CV/RV manually — available from your council rating database or CoreLogic.
-              </p>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase">Valuation Type</label>
-              <select
-                value={valuationType}
-                onChange={e => setValuationType(e.target.value)}
-                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
-              >
-                <option value="">Select...</option>
-                <option>Applicant Estimate</option>
-                <option>Registered Valuation</option>
-                <option>CV/RV</option>
-                <option>CoreLogic</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase">Land Area m²</label>
-              <input
-                type="number"
-                value={landArea}
-                onChange={e => setLandArea(e.target.value === '' ? '' : Number(e.target.value))}
-                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase">Title Number</label>
-              <input
-                value={titleNumber}
-                onChange={e => setTitleNumber(e.target.value)}
-                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
-              />
-            </div>
-            <div className="col-span-2">
-              <label className="text-xs font-medium text-gray-500 uppercase">Legal Description</label>
-              <input
-                value={legalDescription}
-                onChange={e => setLegalDescription(e.target.value)}
-                className="mt-1 w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:text-white"
-              />
-            </div>
-          </div>
-          <div className="mt-4 flex items-center justify-between">
-            <button
-              onClick={handleSaveProperty}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
-            >
-              Save Property Details
-            </button>
-            <p className="text-xs text-gray-400">
-              Address data sourced from LINZ. CV/RV and sale history require CoreLogic integration.
-            </p>
-          </div>
-        </div>
-          </div>
-          <div className="hidden lg:block" />
-        </div>
-
-        {/* Application Notes */}
-        <Card className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700" style={{ maxWidth: '720px' }}>
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Notes</h3>
-          {applicationNotesLoading ? (
-            <div className="flex items-center gap-2 py-6 text-gray-500 dark:text-gray-400">
-              <Icon name="Loader" className="h-5 w-5 animate-spin" />
-              <span className="text-sm">Loading notes...</span>
-            </div>
-          ) : applicationNotes.length === 0 ? (
-            <p className="text-sm text-gray-500 dark:text-gray-400 py-4">No notes yet. Add one below.</p>
-          ) : (
-            <div className="space-y-4 mb-6">
-              {applicationNotes.map((note) => (
-                <div
-                  key={note.id}
-                  className="rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/50 p-4"
-                >
-                  <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 mb-2">
-                    <span className="font-medium text-gray-900 dark:text-white">{note.authorName}</span>
-                    <span>·</span>
-                    <span>{note.createdAt ? new Date(note.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—'}</span>
-                  </div>
-                  <div className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{note.content}</div>
-                </div>
-              ))}
-            </div>
-          )}
-          <form onSubmit={handleAddNote} className="space-y-3 pt-4 border-t border-gray-200 dark:border-gray-700">
-            <textarea
-              value={newNoteText}
-              onChange={(e) => setNewNoteText(e.target.value)}
-              placeholder="Add a note..."
-              rows={3}
-              className={inputClasses}
-            />
-            <Button type="submit" disabled={addingNote || !newNoteText.trim()} isLoading={addingNote}>
-              Add Note
-            </Button>
-          </form>
-        </Card>
-
-
+        <GenerateSOAPopup
+          open={showSoaEditor && Boolean(soaData?.id)}
+          onOpenChange={setShowSoaEditor}
+          dealId={application.id}
+          factFindId={(application as { fact_find_id?: string | null }).fact_find_id ?? null}
+          firmId={firmId}
+          mode="edit"
+          initialData={soaData}
+        />
+        <GenerateSOAPopup
+          open={showGeneratePopup}
+          onOpenChange={(next) => {
+            if (!next) setShowGeneratePopup(false);
+          }}
+          dealId={application.id}
+          factFindId={(application as { fact_find_id?: string | null }).fact_find_id ?? null}
+          firmId={firmId}
+          mode="run"
+        />
 
         {/* AI Lender Recommendation */}
         {false && (
@@ -1273,6 +1333,45 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
         </div>
         )}
       </div>
+
+      {/* Full-screen applicants manager (embeds ApplicantsTab) */}
+      {showApplicantsManager && (
+        <div
+          className="fixed inset-0 z-[60] flex flex-col bg-black/60"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Applicants manager"
+        >
+          <div className="flex justify-end p-3 flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setShowApplicantsManager(false);
+                setSidebarPartiesRefreshKey((k) => k + 1);
+              }}
+              className="rounded-lg p-2 text-white hover:bg-white/10 transition-colors"
+              aria-label="Close applicants manager"
+            >
+              <Icon name="X" className="h-6 w-6" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-hidden px-4 pb-4 min-h-0">
+            <div className="h-full max-h-[calc(100vh-5rem)] overflow-y-auto rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl">
+              <div className="p-4">
+                <ApplicantsTab
+                  application={application}
+                  client={client}
+                  currentUser={advisorId ? { id: advisorId } : null}
+                  onUpdate={() => {
+                    setSidebarPartiesRefreshKey((k) => k + 1);
+                    onUpdate();
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Advice Summary Review Modal */}
       {showAdviceReviewModal && adviceReview && (

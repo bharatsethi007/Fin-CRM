@@ -25,57 +25,7 @@ import { Icon } from './components/common/Icon';
 import { ToastProvider } from './hooks/useToast';
 import { useAuth } from './src/contexts/AuthContext';
 import { AffordabilityCalculatorProvider } from './components/common/AffordabilityCalculator';
-
-// ---------------------------------------------------------------------------
-// Error boundary — catches render crashes and shows a fallback UI
-// ---------------------------------------------------------------------------
-class ErrorBoundary extends React.Component<
-    { children: React.ReactNode },
-    { hasError: boolean; error: string }
-> {
-    constructor(props: { children: React.ReactNode }) {
-        super(props);
-        this.state = { hasError: false, error: '' };
-    }
-
-    static getDerivedStateFromError(error: unknown): { hasError: boolean; error: string } {
-        return {
-            hasError: true,
-            error: error instanceof Error ? error.message : String(error),
-        };
-    }
-
-    componentDidCatch(error: unknown, info: React.ErrorInfo) {
-        logger.error('App error:', error, info);
-    }
-
-    render() {
-        if (this.state.hasError) {
-            return (
-                <div style={{ padding: 40, textAlign: 'center' }}>
-                    <h2 style={{ color: '#dc2626' }}>Something went wrong</h2>
-                    <p style={{ color: '#64748b' }}>{this.state.error}</p>
-                    <button
-                        type="button"
-                        onClick={() => this.setState({ hasError: false, error: '' })}
-                        style={{
-                            padding: '10px 20px',
-                            background: '#6366f1',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: 8,
-                            cursor: 'pointer',
-                            marginTop: 16,
-                        }}
-                    >
-                        Try again
-                    </button>
-                </div>
-            );
-        }
-        return this.props.children;
-    }
-}
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 const findViewName = (view: string): string => {
     for (const section of SIDEBAR_NAV_ITEMS) {
@@ -253,6 +203,13 @@ const App: React.FC = () => {
                 return;
             }
             const path = u.pathname;
+            if (path.startsWith('/settings/')) {
+                const sectionFromPath = path.replace('/settings/', '').trim();
+                if (sectionFromPath) {
+                    setCurrentView(`settings:${sectionFromPath}`);
+                    return;
+                }
+            }
             if (path === '/settings/mfa') {
                 setCurrentView('settings:mfa');
             } else if (path === '/settings/security') {

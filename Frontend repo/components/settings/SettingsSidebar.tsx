@@ -50,6 +50,8 @@ export const SettingsSidebar: React.FC<SettingsSidebarProps> = ({ activeSection,
                                         onClick={(e) => {
                                             e.preventDefault();
                                             setActiveSection(item.id);
+                                            window.history.pushState(null, '', `/settings/${item.id}`);
+                                            window.dispatchEvent(new Event('advflow:navigate'));
                                         }}
                                         className={`flex items-center px-3 py-2 rounded-md transition-colors duration-200 text-sm font-medium ${
                                             activeSection === item.id

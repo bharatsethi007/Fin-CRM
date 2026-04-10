@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import { invokeFunction } from '../lib/api';
+import { invokeParseBankStatement } from '../lib/api';
 
 export const ALLOWED_DOCUMENT_CATEGORIES = [
   '02 Financial Evidence',
@@ -19,6 +19,8 @@ type UploadParams = {
   userId?: string;
   clientId?: string;
   category?: string;
+  /** Checklist item id (e.g. BANK_STATEMENTS_3M); stored in `documents.kyc_section`. */
+  kycSection?: string;
   status?: string;
   uploadDate?: string;
   fileHash?: string;
@@ -54,12 +56,13 @@ export const DocumentsService = {
       ...(params.clientId ? { client_id: params.clientId } : {}),
       ...(params.uploadDate ? { upload_date: params.uploadDate } : {}),
       ...(params.fileHash ? { file_hash: params.fileHash } : {}),
+      ...(params.kycSection ? { kyc_section: params.kycSection } : {}),
     };
 
     const { data, error } = await supabase
       .from('documents')
       .insert(insertPayload)
-      .select('id, name, url, file_type, category, firm_id, application_id, file_size_bytes, parse_status, created_at, upload_date, validation_status, validation_warnings, file_hash')
+      .select('id, name, url, file_type, category, firm_id, application_id, file_size_bytes, parse_status, created_at, upload_date, validation_status, validation_warnings, file_hash, kyc_section')
       .single();
 
     if (error) throw new Error('Save failed: ' + error.message);
@@ -67,17 +70,20 @@ export const DocumentsService = {
   },
 
   async parse(documentId: string, applicationId: string, firmId: string) {
-    return invokeFunction('parse-bank-statement', {
-      document_id: documentId,
-      application_id: applicationId,
-      firm_id: firmId,
-    });
+    return invokeParseBankStatement(
+      {
+        document_id: documentId,
+        application_id: applicationId,
+        firm_id: firmId,
+      },
+      { wait: true },
+    );
   },
 
   async list(applicationId: string) {
     const { data, error } = await supabase
       .from('documents')
-      .select('id, name, category, url, application_id, firm_id, validation_status, validation_warnings, upload_date, file_type, file_size_bytes, parse_status, status, parsed_bank_name, created_at')
+      .select('id, name, category, url, application_id, firm_id, validation_status, validation_warnings, upload_date, file_type, file_size_bytes, parse_status, status, parsed_bank_name, kyc_section, created_at')
       .eq('application_id', applicationId)
       .order('created_at', { ascending: false });
     if (error) throw new Error(error.message);
@@ -87,7 +93,7 @@ export const DocumentsService = {
   async listByClient(clientId: string) {
     const { data, error } = await supabase
       .from('documents')
-      .select('id, name, category, url, application_id, firm_id, validation_status, validation_warnings, upload_date, file_type, file_size_bytes, parse_status, status, parsed_bank_name, created_at')
+      .select('id, name, category, url, application_id, firm_id, validation_status, validation_warnings, upload_date, file_type, file_size_bytes, parse_status, status, parsed_bank_name, kyc_section, created_at')
       .eq('client_id', clientId)
       .order('upload_date', { ascending: false });
     if (error) throw new Error(error.message);
@@ -98,7 +104,7 @@ export const DocumentsService = {
     const { data, error } = await supabase
       .from('documents')
       .insert(payload)
-      .select('id, name, category, url, application_id, firm_id, validation_status, validation_warnings, upload_date, file_type, file_size_bytes, parse_status, status, parsed_bank_name, created_at')
+      .select('id, name, category, url, application_id, firm_id, validation_status, validation_warnings, upload_date, file_type, file_size_bytes, parse_status, status, parsed_bank_name, kyc_section, created_at')
       .single();
     if (error) throw new Error(error.message);
     return data;

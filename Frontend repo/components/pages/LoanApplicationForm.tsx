@@ -6,6 +6,13 @@ import { Icon, IconName } from '../common/Icon';
 import { Card } from '../common/Card';
 import { crmService } from '../../services/api';
 import { geminiService } from '../../services/geminiService';
+import { useToast } from '../../hooks/useToast';
+import {
+  LendingDetailsForm,
+  loadApplicationPropertyRows,
+  persistApplicationProperties,
+  type LendingPropertyRow,
+} from '../deals/LendingDetailsForm';
 
 interface LoanApplicationFormProps {
   client: Client;
@@ -18,6 +25,14 @@ interface LoanApplicationFormProps {
 
 const LOAN_PURPOSES = ['First Home Purchase', 'Next Home Purchase', 'Investment Property', 'Refinance', 'Top-up'];
 
+/** Keeps purpose `<select>` value aligned with an `<option value>`. */
+function normalizeLoanPurpose(raw: string | null | undefined): (typeof LOAN_PURPOSES)[number] {
+  const fallback = LOAN_PURPOSES[0];
+  if (raw == null || String(raw).trim() === '') return fallback;
+  const t = String(raw).trim();
+  return LOAN_PURPOSES.includes(t as (typeof LOAN_PURPOSES)[number]) ? (t as (typeof LOAN_PURPOSES)[number]) : fallback;
+}
+
 const PropertyDetailItem: React.FC<{icon: IconName, label: string, value: string | React.ReactNode}> = ({icon, label, value}) => (
     <div className="flex items-start">
         <Icon name={icon} className="h-5 w-5 mr-3 text-gray-400 flex-shrink-0 mt-0.5" />
@@ -29,6 +44,7 @@ const PropertyDetailItem: React.FC<{icon: IconName, label: string, value: string
 );
 
 const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, draftApplication, isEditMode = false, onBack, onSuccess, onApplicationsUpdated }) => {
+    const toast = useToast();
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isSavingDraft, setIsSavingDraft] = useState(false);
     const [saveSuccessMessage, setSaveSuccessMessage] = useState('');
@@ -38,7 +54,10 @@ const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, draft
         purpose: LOAN_PURPOSES[0],
         term: 30,
     });
-    const [propertyAddress, setPropertyAddress] = useState('51 Kent Terrace, Riverhead, Rodney');
+    const [propertyRows, setPropertyRows] = useState<LendingPropertyRow[]>([
+        { address: '12 Main Street, Weston, Otago', isPrimary: true },
+    ]);
+    const primaryPropertyAddress = (propertyRows[0]?.address ?? '').trim();
     const [propertyValue, setPropertyValue] = useState<number | null>(null);
     const [propertyDetails, setPropertyDetails] = useState<OneRoofPropertyDetails | null>(null);
     const [isSearchingProperty, setIsSearchingProperty] = useState(false);
@@ -95,10 +114,14 @@ const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, draft
                 if (existingApp) {
                     setLendingDetails({
                         loanAmount: Number(existingApp.loan_amount) || 500000,
-                        purpose: existingApp.loan_purpose || LOAN_PURPOSES[0],
+                        purpose: normalizeLoanPurpose(existingApp.loan_purpose as string | null | undefined),
                         term: existingApp.loan_term_years || 30,
                     });
-                    setPropertyAddress(existingApp.property_address || '');
+                    const loadedRows = await loadApplicationPropertyRows(
+                        draftApplication.id,
+                        existingApp.property_address || '',
+                    );
+                    setPropertyRows(loadedRows);
                     setPropertyValue(existingApp.property_value ? Number(existingApp.property_value) : null);
                     setPropertyDetails(existingApp.property_details as OneRoofPropertyDetails | null);
                     setSelectedLenders(existingApp.selected_lenders || (existingApp.lender_name ? [existingApp.lender_name] : []));
@@ -129,7 +152,7 @@ const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, draft
     };
 
     const handlePropertySearch = async () => {
-        if (!propertyAddress.trim()) return;
+        if (!primaryPropertyAddress) return;
         setIsSearchingProperty(true);
         setPropertyValue(null);
         setPropertyDetails(null);
@@ -139,7 +162,7 @@ const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, draft
             const mockValue = Math.floor(Math.random() * (1500000 - 700000 + 1)) + 700000;
             setPropertyValue(mockValue);
 
-            const details = await crmService.getOneRoofPropertyDetails(propertyAddress);
+            const details = await crmService.getOneRoofPropertyDetails(primaryPropertyAddress);
             setPropertyDetails(details);
         } catch (error) {
             logger.error("Failed to fetch property details", error);
@@ -157,11 +180,13 @@ const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, draft
     const handleSaveDraft = async () => {
         setIsSavingDraft(true);
         try {
+            const nextRows = await persistApplicationProperties(draftApplication.id, propertyRows);
+            setPropertyRows(nextRows);
             await crmService.saveApplicationDraft(draftApplication.id, {
                 loanAmount: lendingDetails.loanAmount,
                 purpose: lendingDetails.purpose,
                 term: lendingDetails.term,
-                propertyAddress: propertyAddress,
+                propertyAddress: nextRows[0]?.address?.trim() || '',
                 propertyValue: propertyValue,
                 propertyDetails: propertyDetails as Record<string, unknown> | null,
                 selectedLenders,
@@ -181,11 +206,13 @@ const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, draft
         if (!propertyValue || !propertyDetails || selectedLenders.length === 0) return;
         setIsSubmitting(true);
         try {
+            const nextRows = await persistApplicationProperties(draftApplication.id, propertyRows);
+            setPropertyRows(nextRows);
             await crmService.submitApplication(draftApplication.id, {
                 loanAmount: lendingDetails.loanAmount,
                 purpose: lendingDetails.purpose,
                 term: lendingDetails.term,
-                propertyAddress: propertyAddress,
+                propertyAddress: nextRows[0]?.address?.trim() || '',
                 propertyValue: propertyValue,
                 propertyDetails: propertyDetails as Record<string, unknown>,
                 selectedLenders,
@@ -239,7 +266,9 @@ const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, draft
                              <div>
                                 <label htmlFor="purpose" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Purpose</label>
                                 <select name="purpose" id="purpose" value={lendingDetails.purpose} onChange={handleLendingChange} className={`${inputClasses} mt-1`}>
-                                    {LOAN_PURPOSES.map(p => <option key={p}>{p}</option>)}
+                                    {LOAN_PURPOSES.map((p) => (
+                                        <option key={p} value={p}>{p}</option>
+                                    ))}
                                 </select>
                             </div>
                              <div>
@@ -251,13 +280,23 @@ const LoanApplicationForm: React.FC<LoanApplicationFormProps> = ({ client, draft
 
                     <Card>
                         <h3 className="text-lg font-semibold mb-4">Property Details</h3>
+                        <LendingDetailsForm
+                            dealId={draftApplication.id}
+                            properties={propertyRows}
+                            onPropertiesChange={setPropertyRows}
+                            toast={toast}
+                        />
+                        <p className="mb-2 mt-4 text-xs text-gray-500 dark:text-gray-400">
+                            OneRoof lookup uses the <strong>first</strong> property address.
+                        </p>
                         <div className="flex gap-2">
-                             <input type="text" placeholder="Enter property address to search..." value={propertyAddress} onChange={(e) => setPropertyAddress(e.target.value)} className={`${inputClasses} flex-grow`} />
-                             <Button onClick={handlePropertySearch} isLoading={isSearchingProperty} leftIcon="Search">Find Property</Button>
+                             <Button onClick={handlePropertySearch} isLoading={isSearchingProperty} leftIcon="Search" disabled={!primaryPropertyAddress}>
+                                Find Property
+                             </Button>
                         </div>
                         {propertyValue && (
                             <div className="mt-4 p-4 bg-primary-50 dark:bg-primary-900/20 rounded-lg border border-primary-200 dark:border-primary-800">
-                                <p className="font-semibold">{propertyAddress}</p>
+                                <p className="font-semibold">{primaryPropertyAddress || '—'}</p>
                                 <p className="text-sm">CoreLogic Estimated Value: <span className="font-bold text-lg text-primary-600 dark:text-primary-400">${propertyValue.toLocaleString()}</span></p>
                             </div>
                         )}

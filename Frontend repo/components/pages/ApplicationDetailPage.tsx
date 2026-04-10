@@ -18,11 +18,13 @@ import { ApplicationIntelligence } from '../applications/ApplicationIntelligence
 import { SmartComplianceTab } from '../applications/SmartComplianceTab';
 import FinancialProfileTab from '../applications/FinancialProfileTab';
 import { FlowIntelligencePanel } from '../flow/FlowIntelligencePanel';
+import { AffordabilityCalculatorProvider } from '../common/AffordabilityCalculator';
+import { IssuesPanel, type Issue } from '@/components/deals/IssuesPanel';
+import { FieldWithAnomaly } from '@/components/ui/FieldWithAnomaly';
 
 const TABS: { id: string; name: string; icon: IconName }[] = [
   { id: 'overview', name: 'Overview', icon: 'FileText' },
   { id: 'Agents', name: 'Intelligence', icon: 'Bot' },
-  { id: 'applicants', name: 'Applicants', icon: 'Users' },
   { id: 'financial', name: 'Financial Profile', icon: 'Wallet' },
   { id: 'assets', name: 'Assets', icon: 'Gem' },
   { id: 'liabilities', name: 'Liabilities', icon: 'Landmark' },
@@ -153,12 +155,6 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
             </>
           </ErrorBoundary>
         );
-      case 'applicants':
-        return (
-          <ErrorBoundary fallbackMessage="Failed to load this tab">
-            <ApplicantsTab application={application} client={client} currentUser={currentUser} onUpdate={onUpdate} />
-          </ErrorBoundary>
-        );
       case 'financial':
         return (
           <ErrorBoundary fallbackMessage="Failed to load this tab">
@@ -232,22 +228,52 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
 
   const currentStage = STATUS_TO_WORKFLOW_STAGE[application.status?.toString() || ''] ?? (application.status || 'draft').toString().toLowerCase();
 
+  const loanMeta = application as Application & { loan_purpose?: string; loanPurpose?: string };
+  const loanPurposeLabel =
+    loanMeta.loan_purpose?.trim() || loanMeta.loanPurpose?.trim() || 'Purchase';
+  const headerLoanDisplay =
+    application.loanAmount != null && application.loanAmount > 0
+      ? `$${Number(application.loanAmount).toLocaleString()}`
+      : '—';
+
+  const headerIssues: Issue[] = [
+    {
+      id: 'expenses-hem',
+      severity: 'high',
+      title: 'Expenses below HEM',
+      description:
+        'Declared $758/mo vs HEM $3,400/mo. Lender will use HEM for servicing, reducing borrowing capacity by ~$180k.',
+      field: 'Total expenses',
+      fix: () => {
+        setActiveTab('financial');
+      },
+    },
+    {
+      id: 'ird-missing',
+      severity: 'critical',
+      title: 'Missing IRD number',
+      description: 'Required for income verification with IRD.',
+      field: 'IRD Number',
+    },
+  ];
+
   return (
     <div className="text-gray-900 dark:text-gray-100">
       {/* Top header */}
-      <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-        <div className="flex flex-wrap items-center gap-3">
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div className="flex min-w-0 flex-wrap items-start gap-3">
           <Button onClick={onBack} variant="secondary" leftIcon="ArrowLeft" className="flex-shrink-0">
             Back
           </Button>
-          <div className="flex flex-wrap items-center gap-3">
-            <h2 className="text-xl font-bold text-gray-900 dark:text-white">{client.name || 'Unknown'}</h2>
-            <span className="text-gray-500 dark:text-gray-400">·</span>
-            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{application.referenceNumber}</span>
-            <WorkflowPill stage={currentStage} />
-            <span className="text-sm font-semibold text-gray-900 dark:text-white">
-              {application.loanAmount ? `$${(application.loanAmount ?? 0).toLocaleString()}` : '—'}
-            </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">{client.name || 'Unknown'}</h1>
+              <WorkflowPill stage={currentStage} />
+              <IssuesPanel score={67} issues={headerIssues} />
+            </div>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              {application.referenceNumber ?? '—'} · {loanPurposeLabel} · {headerLoanDisplay}
+            </p>
           </div>
         </div>
         <button
@@ -294,7 +320,9 @@ export const ApplicationDetailPage: React.FC<ApplicationDetailPageProps> = ({
         </div>
 
         <main className="p-6 bg-white dark:bg-gray-800 min-h-[400px]">
-          {renderTabContent()}
+          <AffordabilityCalculatorProvider>
+            {renderTabContent()}
+          </AffordabilityCalculatorProvider>
         </main>
       </Card>
 

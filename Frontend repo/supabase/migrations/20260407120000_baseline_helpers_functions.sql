@@ -632,9 +632,11 @@ BEGIN
     ELSE 'insufficient_data'
   END;
 
-  -- Get per-lender outcomes
-  SELECT jsonb_agg(
-    jsonb_build_object(
+  -- Per-lender aggregates: subquery avoids nested aggregates (jsonb_agg + COUNT in one level).
+  SELECT COALESCE(jsonb_agg(agg_rows.row_json), '[]'::jsonb)
+  INTO v_lender_rates
+  FROM (
+    SELECT jsonb_build_object(
       'lender', lender_submitted,
       'total', COUNT(*),
       'approved', COUNT(*) FILTER (WHERE outcome IN ('approved','conditional')),
@@ -646,21 +648,20 @@ BEGIN
       'avg_days_to_outcome', ROUND(AVG(days_to_outcome), 0),
       'avg_conditions', ROUND(AVG(conditions_count), 1),
       'common_decline_reason', MODE() WITHIN GROUP (ORDER BY decline_reason_category)
-    )
-  )
-  INTO v_lender_rates
-  FROM public.application_outcomes
-  WHERE firm_id = v_app.firm_id
-    AND lender_submitted IS NOT NULL
-    AND lvr_band = v_lvr_band
-    AND (
-      CASE WHEN v_svc.dti_ratio <= 3 THEN '0-3x'
-           WHEN v_svc.dti_ratio <= 4.5 THEN '3-4.5x'
-           WHEN v_svc.dti_ratio <= 6 THEN '4.5-6x'
-           ELSE '6x+' END = v_dti_band
-    )
-  GROUP BY lender_submitted
-  HAVING COUNT(*) >= 2;
+    ) AS row_json
+    FROM public.application_outcomes
+    WHERE firm_id = v_app.firm_id
+      AND lender_submitted IS NOT NULL
+      AND lvr_band = v_lvr_band
+      AND (
+        CASE WHEN v_svc.dti_ratio <= 3 THEN '0-3x'
+             WHEN v_svc.dti_ratio <= 4.5 THEN '3-4.5x'
+             WHEN v_svc.dti_ratio <= 6 THEN '4.5-6x'
+             ELSE '6x+' END = v_dti_band
+      )
+    GROUP BY lender_submitted
+    HAVING COUNT(*) >= 2
+  ) agg_rows;
 
   -- Run decline risk calculation and get results
   PERFORM public.calculate_decline_risk(p_application_id);

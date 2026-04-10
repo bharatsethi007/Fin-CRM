@@ -71,4 +71,12 @@ export const SETTINGS_NAV_ITEMS: SettingsNavGroup[] = [
         title: 'AI',
         items: [{ id: 'ai-skills', name: 'AI Skills & Style', icon: 'Sparkles', group: 'AI' }],
     },
+    {
+        title: 'SOA & AI',
+        items: [
+            { id: 'knowledge-bank', name: 'Knowledge Bank', icon: 'BookOpen' },
+            { id: 'sentences', name: 'Sentence Library', icon: 'FileText' },
+            { id: 'preferences', name: 'SOA Preferences', icon: 'Settings' },
+        ],
+    },
 ];

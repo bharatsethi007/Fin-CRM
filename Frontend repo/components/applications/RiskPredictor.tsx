@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../services/supabaseClient';
+import { logger } from '../../utils/logger';
 
 interface Props {
   applicationId: string;
@@ -55,18 +56,29 @@ function riskLabel(score: number): string {
 
 export const RiskPredictor: React.FC<Props> = ({ applicationId }) => {
   const [data, setData] = useState<RiskData | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   async function load() {
     setLoading(true);
-    setError(null);
-    const { data: result, error: err } = await supabase
-      .rpc('get_risk_prediction', { p_application_id: applicationId });
-    if (err) setError(err.message);
-    else if (result?.error) setError(result.error);
-    else setData(result as RiskData);
-    setLoading(false);
+    setData(null);
+    try {
+      const { data: result, error: err } = await supabase.rpc('get_risk_prediction', {
+        p_application_id: applicationId,
+      });
+      if (err) {
+        logger.error('RiskPredictor: get_risk_prediction', err.message);
+        return;
+      }
+      if (result && typeof result === 'object' && 'error' in result && result.error) {
+        logger.error('RiskPredictor: get_risk_prediction', String(result.error));
+        return;
+      }
+      setData(result as RiskData);
+    } catch (e) {
+      logger.error('RiskPredictor: get_risk_prediction', e);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { load(); }, [applicationId]);
@@ -78,11 +90,6 @@ export const RiskPredictor: React.FC<Props> = ({ applicationId }) => {
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
       <span style={{ fontSize: 13, color: '#64748b' }}>Analysing risk profile...</span>
     </div>
-  );
-
-  if (error) return (
-    <div style={{ padding: '12px 16px', background: '#fef2f2', border: '1px solid #fecaca',
-      borderRadius: 10, fontSize: 13, color: '#dc2626' }}>{error}</div>
   );
 
   if (!data) return null;

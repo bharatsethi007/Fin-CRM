@@ -21,6 +21,8 @@ type Payload = {
   /** Optional when document `detected_type` is `id_document` (client onboarding scan). */
   application_id?: string;
   firm_id: string;
+  /** Optional: links coverage + transactions to an applicant when known. */
+  applicant_id?: string;
 };
 
 function arrayBufferToBase64(buf: ArrayBuffer): string {
@@ -44,6 +46,16 @@ function parseJsonFromModelText(text: string): Record<string, unknown> {
     const m = cleaned.match(/\{[\s\S]*\}/);
     if (!m) throw new Error("Could not parse model response as JSON");
     return JSON.parse(m[0]) as Record<string, unknown>;
+  }
+}
+
+/** Derives the stored filename from a document URL for income deduplication. */
+function sourceFileNameFromUrl(url: string): string {
+  try {
+    const seg = url.split("/").pop() ?? "";
+    return decodeURIComponent(seg.split("?")[0] || "").trim() || "document";
+  } catch {
+    return (url.split("/").pop() ?? "").split("?")[0] || "document";
   }
 }
 
@@ -229,6 +241,10 @@ Return ONLY valid JSON, no markdown.`;
 
 8. notes: brief summary of financial health observations
 
+9. transactions: array of statement line items, each:
+   { "date": "YYYY-MM-DD", "description": "payee / memo text", "amount": <positive number>, "direction": "credit" | "debit" }.
+   Use credits for money in, debits for money out. If line-level rows cannot be recovered, return [].
+
 Return ONLY valid JSON, no markdown.`;
     case "tax_return":
     case "ir3":
@@ -313,6 +329,277 @@ function bankStatementRiskFromExtracted(extracted: Record<string, unknown>): {
     }
   }
   return { gambling, bnpl, dishonour };
+}
+
+type TxNormalised = {
+  date: string;
+  description: string;
+  amount: number;
+  direction: "credit" | "debit";
+};
+
+type CategoriseResult = {
+  category: string;
+  confidence: "high" | "medium" | "low";
+  merchantKnown: boolean;
+};
+
+/** Rule-based merchant/category assignment for bank statement lines. */
+function categoriseTransaction(
+  description: string,
+  direction: "credit" | "debit",
+): CategoriseResult {
+  const d = (description || "").trim().toLowerCase();
+  if (!d) {
+    return {
+      category: direction === "credit" ? "income_other" : "other_expense",
+      confidence: "low",
+      merchantKnown: false,
+    };
+  }
+  if (direction === "credit") {
+    if (
+      /salary|wage|payroll|employer|inland\s*revenue|ird|dividend|interest\s*credit|^transfer\s*in/
+        .test(d)
+    ) {
+      return { category: "income_salary", confidence: "high", merchantKnown: true };
+    }
+    if (/deposit|refund|credit/.test(d)) {
+      return { category: "income_other", confidence: "medium", merchantKnown: true };
+    }
+    return { category: "income_other", confidence: "low", merchantKnown: false };
+  }
+  if (/tab\b|lotto|betting|sky\s*city|casino|gambling/.test(d)) {
+    return { category: "gambling", confidence: "high", merchantKnown: true };
+  }
+  if (/afterpay|laybuy|\bzip\b|humm|klarna|genoapay/.test(d)) {
+    return { category: "bnpl_afterpay", confidence: "high", merchantKnown: true };
+  }
+  if (/mortgage|home\s*loan|home\s*lending|loan\s*repayment|personal\s*loan/.test(d)) {
+    return { category: "loan_repayments", confidence: "medium", merchantKnown: true };
+  }
+  if (/rent|landlord|board|accommodation/.test(d)) {
+    return { category: "rent_mortgage", confidence: "medium", merchantKnown: true };
+  }
+  if (
+    /countdown|pak\s*nsave|paknsave|new\s*world|supermarket|grocery|woolworths/.test(d)
+  ) {
+    return { category: "food_groceries", confidence: "high", merchantKnown: true };
+  }
+  if (/uber\s*eats|menulog|restaurant|mcdonald|kfc|cafe/.test(d)) {
+    return { category: "dining_takeaway", confidence: "medium", merchantKnown: true };
+  }
+  if (/\bbp\b|\bz\s*energy\b|mobil|petrol|fuel|at\s*hop|snapper/.test(d)) {
+    return { category: "transport_fuel", confidence: "medium", merchantKnown: true };
+  }
+  if (/mercury|genesis|contact|power|electric|broadband|spark|vodafone|2degrees/.test(d)) {
+    return { category: "utilities", confidence: "medium", merchantKnown: true };
+  }
+  if (/netflix|spotify|disney|youtube\s*premium|subscription/.test(d)) {
+    return { category: "subscriptions", confidence: "medium", merchantKnown: true };
+  }
+  return { category: "other_expense", confidence: "low", merchantKnown: false };
+}
+
+/** Flags risky debit lines for UI (gambling, BNPL, etc.). */
+function flagForTransaction(
+  description: string,
+  anomalies: unknown,
+): { is_flagged: boolean; flag_reason: string | null } {
+  const d = (description || "").toLowerCase();
+  if (/tab\b|lotto|betting|sky\s*city|casino|gambling/.test(d)) {
+    return { is_flagged: true, flag_reason: "Gambling" };
+  }
+  if (/afterpay|laybuy|\bzip\b|humm|klarna/.test(d)) {
+    return { is_flagged: true, flag_reason: "BNPL" };
+  }
+  if (Array.isArray(anomalies)) {
+    for (const a of anomalies) {
+      const o = a as Record<string, unknown>;
+      const blob = `${o.description ?? ""} ${o.reason ?? ""}`.toLowerCase();
+      const desc = String(o.description ?? "");
+      if (desc && d.includes(desc.toLowerCase().slice(0, 12))) {
+        return {
+          is_flagged: true,
+          flag_reason: String(o.category ?? o.reason ?? "Flagged"),
+        };
+      }
+      if (/gambling|bnpl|afterpay|payday|dishonour/.test(blob) && d.length > 3) {
+        if (
+          desc.length < 2 || d.includes(desc.toLowerCase().slice(0, 8))
+        ) {
+          return {
+            is_flagged: true,
+            flag_reason: String(o.category ?? "Anomaly"),
+          };
+        }
+      }
+    }
+  }
+  return { is_flagged: false, flag_reason: null };
+}
+
+/** Normalises model `transactions` array into typed rows. */
+function parseTransactionsFromExtracted(
+  extracted: Record<string, unknown>,
+): TxNormalised[] {
+  const raw = extracted.transactions;
+  if (!Array.isArray(raw)) return [];
+  const out: TxNormalised[] = [];
+  for (const item of raw) {
+    const r = item as Record<string, unknown>;
+    const dateRaw = String(r.date ?? r.txn_date ?? "").trim().slice(0, 10);
+    const desc = String(r.description ?? r.merchant ?? r.payee ?? "").trim();
+    const n = Number(r.amount ?? 0);
+    const amt = Math.abs(Number.isFinite(n) ? n : 0);
+    const dirStr = String(r.direction ?? r.type ?? "").toLowerCase();
+    let direction: "credit" | "debit" = "debit";
+    if (dirStr.includes("credit") || dirStr === "cr") direction = "credit";
+    if (dirStr.includes("debit") || dirStr === "dr") direction = "debit";
+    if (typeof r.amount === "number" && r.amount > 0 && r.is_credit === true) {
+      direction = "credit";
+    }
+    if (typeof r.amount === "number" && r.amount < 0) {
+      direction = "debit";
+    }
+    if (!dateRaw || !desc || amt <= 0) continue;
+    out.push({
+      date: dateRaw,
+      description: desc,
+      amount: amt,
+      direction,
+    });
+  }
+  return out;
+}
+
+/** First day of calendar month for a YYYY-MM-DD string (UTC-safe). */
+function firstDayOfCalendarMonth(isoDate: string): string {
+  const parts = isoDate.split("-").map((x) => parseInt(x, 10));
+  if (parts.length < 2 || Number.isNaN(parts[0]) || Number.isNaN(parts[1])) {
+    return isoDate.slice(0, 7) + "-01";
+  }
+  const y = parts[0];
+  const m = parts[1];
+  return `${y}-${String(m).padStart(2, "0")}-01`;
+}
+
+/** Each calendar month from start..end (inclusive) as YYYY-MM-01. */
+function monthsBetweenFirstDays(startIso: string, endIso: string): string[] {
+  const s = new Date(startIso + "T12:00:00Z");
+  const e = new Date(endIso + "T12:00:00Z");
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return [];
+  let cur = new Date(Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), 1));
+  const end = new Date(Date.UTC(e.getUTCFullYear(), e.getUTCMonth(), 1));
+  const out: string[] = [];
+  while (cur <= end) {
+    const y = cur.getUTCFullYear();
+    const mo = cur.getUTCMonth() + 1;
+    out.push(`${y}-${String(mo).padStart(2, "0")}-01`);
+    cur = new Date(Date.UTC(y, mo, 1));
+  }
+  return out;
+}
+
+async function persistBankTransactionsAndCoverage(
+  supabase: ReturnType<typeof createClient>,
+  params: {
+    application_id: string;
+    firm_id: string;
+    document_id: string;
+    applicant_id: string | null;
+    extracted: Record<string, unknown>;
+    bankName: string;
+  },
+): Promise<void> {
+  const { application_id, firm_id, document_id, applicant_id, extracted, bankName } =
+    params;
+  const transactions = parseTransactionsFromExtracted(extracted);
+  const periodStart = String(
+    extracted.statement_period_start ?? "",
+  ).slice(0, 10);
+  const periodEnd = String(extracted.statement_period_end ?? "").slice(0, 10);
+
+  let earliest = periodStart;
+  let latest = periodEnd;
+  for (const t of transactions) {
+    if (!earliest || t.date < earliest) earliest = t.date;
+    if (!latest || t.date > latest) latest = t.date;
+  }
+  if (!earliest) earliest = latest;
+  if (!latest) latest = earliest;
+  if (!earliest && !latest) return;
+
+  const monthStarts = monthsBetweenFirstDays(
+    firstDayOfCalendarMonth(earliest),
+    firstDayOfCalendarMonth(latest),
+  );
+  const countByMonth = new Map<string, number>();
+  for (const m of monthStarts) countByMonth.set(m.slice(0, 7), 0);
+  for (const t of transactions) {
+    const key = t.date.slice(0, 7);
+    countByMonth.set(key, (countByMonth.get(key) ?? 0) + 1);
+  }
+
+  const txRows: Record<string, unknown>[] = [];
+  for (const t of transactions) {
+    const cat = categoriseTransaction(t.description, t.direction);
+    let needs_review = false;
+    let review_reason: string | null = null;
+    if (
+      cat.category === "other_expense" &&
+      cat.confidence === "low" &&
+      !cat.merchantKnown
+    ) {
+      needs_review = true;
+      review_reason = "Unrecognised merchant — please categorise";
+    }
+    const flag = flagForTransaction(t.description, extracted.anomalies);
+    txRows.push({
+      application_id,
+      firm_id,
+      applicant_id,
+      document_id,
+      transaction_date: t.date,
+      description: t.description,
+      amount: t.amount,
+      direction: t.direction,
+      ai_category: cat.category,
+      categorisation_confidence: cat.confidence,
+      needs_review,
+      review_reason,
+      is_flagged: flag.is_flagged,
+      flag_reason: flag.flag_reason,
+      updated_at: new Date().toISOString(),
+    });
+  }
+
+  await supabase.from("bank_transactions").delete().eq("document_id", document_id);
+
+  if (txRows.length > 0) {
+    const { error } = await supabase.from("bank_transactions").insert(txRows);
+    if (error) throw error;
+  }
+
+  const coverageRows = monthStarts.map((statement_month) => ({
+    application_id,
+    firm_id,
+    applicant_id,
+    document_id,
+    statement_month,
+    bank_name: bankName,
+    transaction_count: countByMonth.get(statement_month.slice(0, 7)) ?? 0,
+    updated_at: new Date().toISOString(),
+  }));
+
+  if (coverageRows.length > 0) {
+    const { error: cErr } = await supabase
+      .from("bank_statement_coverage")
+      .upsert(coverageRows, {
+        onConflict: "application_id,document_id,statement_month",
+      });
+    if (cErr) throw cErr;
+  }
 }
 
 function buildParseSummary(
@@ -599,8 +886,12 @@ serve(async (req) => {
         freq,
       );
 
+      const sourceFileName = sourceFileNameFromUrl(fileUrl);
+
       const incomePayload = {
         applicant_id: applicant.id,
+        application_id,
+        source_file_name: sourceFileName,
         income_type: "salary",
         gross_salary: gross,
         salary_frequency: freq,
@@ -624,10 +915,30 @@ serve(async (req) => {
           .eq("id", existingIncome.id);
         if (upErr) throw new Error(upErr.message);
       } else {
-        const { error: insErr } = await supabase
+        const incomeRow = {
+          applicant_id: applicant.id,
+          income_type: incomePayload.income_type,
+          gross_salary: incomePayload.gross_salary,
+          salary_frequency: incomePayload.salary_frequency,
+        };
+
+        const { data: existing, error: existErr } = await supabase
           .from("income")
-          .insert(incomePayload);
-        if (insErr) throw new Error(insErr.message);
+          .select("id")
+          .eq("applicant_id", incomeRow.applicant_id)
+          .eq("income_type", incomeRow.income_type)
+          .eq("gross_salary", incomeRow.gross_salary)
+          .eq("salary_frequency", incomeRow.salary_frequency)
+          .maybeSingle();
+
+        if (existErr) throw new Error(existErr.message);
+
+        if (!existing) {
+          const { error: insErr } = await supabase
+            .from("income")
+            .insert(incomePayload);
+          if (insErr) throw new Error(insErr.message);
+        }
       }
 
       fieldsPopulated.push(
@@ -670,6 +981,25 @@ serve(async (req) => {
         });
 
       if (bErr) throw new Error(bErr.message);
+
+      try {
+        const applicantScoped: string | null = body.applicant_id
+          ? String(body.applicant_id)
+          : null;
+        await persistBankTransactionsAndCoverage(supabase, {
+          application_id,
+          firm_id,
+          document_id,
+          applicant_id: applicantScoped,
+          extracted,
+          bankName: String(extracted.bank_name ?? ""),
+        });
+      } catch (txCovErr) {
+        console.error(
+          "parse-bank-statement: bank_transactions / bank_statement_coverage (non-fatal):",
+          txCovErr,
+        );
+      }
 
       fieldsPopulated.push(
         "regular_income_monthly",

@@ -161,3 +161,27 @@ body {
 .ai-button-wrapper.loading .ai-button-inner:hover {
   color: #e5e7eb;
 }
+
+/* SOA client viewer — hide chrome when printing to PDF */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white !important;
+  }
+  [data-radix-dialog-overlay] {
+    display: none !important;
+  }
+  .soa-viewer-print-root {
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
+    transform: none !important;
+    max-height: none !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    background: white !important;
+    box-shadow: none !important;
+  }
+}
