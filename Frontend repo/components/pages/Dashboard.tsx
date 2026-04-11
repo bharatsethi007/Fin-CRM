@@ -1,34 +1,28 @@
-import { useAuth } from '../../src/contexts/AuthContext';
 import { logger } from '../../utils/logger';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import {
-  DndContext,
-  closestCenter,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from '@dnd-kit/core';
-import { SortableContext, rectSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import { crmService } from '../../services/api';
 import { supabase } from '../../services/supabaseClient';
-import { Icon } from '../common/Icon';
-import { useToast } from '../../hooks/useToast';
-import { SortableDashboardWidget } from '../dashboard/SortableDashboardWidget';
 import { renderDashboardWidget, type DashboardWidgetParams } from '../dashboard/dashboardWidgetRender';
-import {
-  type WidgetId,
-  type WidgetLayoutItem,
-  WIDGET_LABELS,
-  WIDGET_CUSTOMISE_ORDER,
-  defaultWidgetLayout,
-  mergeWidgetLayout,
-  normalizeWidgetOrder,
-} from '../../constants/dashboardWidgets';
+import type { WidgetId } from '../../constants/dashboardWidgets';
 import type { Application, Advisor, Task, Client, Note } from '../../types';
 import { ApplicationStatus } from '../../types';
 import { useTheme } from '../../src/contexts/ThemeContext';
 import { useAutoRefresh } from '../hooks/useAutoRefresh';
+import { FirmDashboardPage } from '@/app/dashboard/page';
+import type { FlowBriefingMetric } from '@/components/dashboard/FlowBriefing';
+import {
+  sparklineActiveTouchesByDay,
+  sparklineSettledDealsByDay,
+  teamCapacityFromAdvisorsAndApps,
+  type DashboardKpiDeckProps,
+} from '@/components/dashboard/KPICards';
+import { type ApplicationRow } from '@/components/dashboard/PriorityQueue';
+import {
+  stashApplicationsListPreset,
+  stashCommissionListPreset,
+  type AppListPreset,
+  type CommissionListPreset,
+} from '@/constants/dashboardDrill';
 
 /** Design tokens — src/index.css */
 const DS = {
@@ -69,6 +63,8 @@ interface DashboardProps {
   navigateToClient: (clientId: string) => void;
   navigateToApplication: (applicationId: string) => void;
   advisor: Advisor;
+  viewMode: 'my' | 'firm';
+  setViewMode: (mode: 'my' | 'firm') => void;
 }
 
 function todayISO(): string {
@@ -80,6 +76,137 @@ function formatCurrency(value: number): string {
   if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}K`;
   return `$${value.toLocaleString()}`;
 }
+
+const PQ_APPLICATION_STATUSES = ['active', 'in_progress', 'submitted', 'pre_approval', 'on_hold'] as const;
+
+type PriorityQueueMergedRow = {
+  id: string;
+  reference_number: string | null;
+  loan_amount: number | null;
+  status: string | null;
+  workflow_stage: string | null;
+  settlement_date: string | null;
+  assigned_to: string | null;
+  client_id: string | null;
+  readiness: {
+    total_score: number | null;
+    score_grade: string | null;
+    is_ready_to_submit: boolean | null;
+  } | null;
+  client: { first_name?: string | null; last_name?: string | null } | null;
+};
+
+/** Latest readiness row per application from a flat score list (by scored_at). */
+function latestReadinessByApplicationId(
+  scores: {
+    application_id: string;
+    total_score?: number | null;
+    score_grade?: string | null;
+    is_ready_to_submit?: boolean | null;
+    scored_at?: string | null;
+  }[],
+): Map<string, NonNullable<PriorityQueueMergedRow['readiness']>> {
+  const sorted = [...scores].sort((a, b) => {
+    const ta = a.scored_at ? new Date(a.scored_at).getTime() : 0;
+    const tb = b.scored_at ? new Date(b.scored_at).getTime() : 0;
+    return tb - ta;
+  });
+  const map = new Map<string, NonNullable<PriorityQueueMergedRow['readiness']>>();
+  for (const s of sorted) {
+    if (!map.has(s.application_id)) {
+      map.set(s.application_id, {
+        total_score: s.total_score == null ? null : Number(s.total_score),
+        score_grade: s.score_grade ?? null,
+        is_ready_to_submit: s.is_ready_to_submit ?? null,
+      });
+    }
+  }
+  return map;
+}
+
+/** Sorts merged queue rows: total_score ASC (nulls last), settlement_date ASC. */
+function sortPriorityQueueMerged(merged: PriorityQueueMergedRow[]): PriorityQueueMergedRow[] {
+  return [...merged].sort((a, b) => {
+    const sA = a.readiness?.total_score ?? 999;
+    const sB = b.readiness?.total_score ?? 999;
+    if (sA !== sB) return sA - sB;
+    return (
+      new Date(a.settlement_date ?? '9999-12-31').getTime() -
+      new Date(b.settlement_date ?? '9999-12-31').getTime()
+    );
+  });
+}
+
+/** Fetches applications → scores → clients, merges in JS (no nested FK). */
+async function fetchPriorityQueueMerged(
+  firmId: string,
+  viewMode: 'my' | 'firm',
+  advisorId: string,
+): Promise<PriorityQueueMergedRow[]> {
+  let appsQuery = supabase
+    .from('applications')
+    .select('id, reference_number, loan_amount, status, workflow_stage, settlement_date, assigned_to, client_id')
+    .eq('firm_id', firmId)
+    .in('status', [...PQ_APPLICATION_STATUSES])
+    .limit(20);
+  if (viewMode === 'my') {
+    appsQuery = appsQuery.eq('assigned_to', advisorId);
+  }
+  const { data: apps, error: appsErr } = await appsQuery;
+  if (appsErr) {
+    logger.log('Priority queue: applications query failed', appsErr.message);
+    return [];
+  }
+  if (!apps?.length) return [];
+  const appIds = apps.map((a) => a.id);
+  const { data: scores, error: scErr } = await supabase
+    .from('application_readiness_scores')
+    .select(
+      'application_id, total_score, score_grade, is_ready_to_submit, critical_count, high_count, scored_at',
+    )
+    .in('application_id', appIds);
+  if (scErr) logger.log('Priority queue: application_readiness_scores unavailable', scErr.message);
+  const scoreMap = latestReadinessByApplicationId(scores ?? []);
+  const rawClientIds = apps.map((a) => a.client_id).filter(Boolean) as string[];
+  const clientIds = [...new Set(rawClientIds)];
+  let clientRows: { id: string; first_name?: string | null; last_name?: string | null }[] = [];
+  if (clientIds.length > 0) {
+    const { data: cdata, error: cErr } = await supabase
+      .from('clients')
+      .select('id, first_name, last_name')
+      .in('id', clientIds);
+    if (cErr) logger.log('Priority queue: clients query failed', cErr.message);
+    clientRows = cdata ?? [];
+  }
+  const clientById = new Map(clientRows.map((c) => [c.id, c]));
+  let merged: PriorityQueueMergedRow[] = apps.map((app) => ({
+    id: app.id,
+    reference_number: app.reference_number,
+    loan_amount: app.loan_amount,
+    status: app.status,
+    workflow_stage: app.workflow_stage,
+    settlement_date: app.settlement_date,
+    assigned_to: app.assigned_to,
+    client_id: app.client_id,
+    readiness: scoreMap.get(app.id) ?? null,
+    client: app.client_id ? clientById.get(app.client_id) ?? null : null,
+  }));
+  merged = sortPriorityQueueMerged(merged);
+  return merged;
+}
+
+/** Builds the left-hand date segment for the firm briefing strip (e.g. "Saturday 11 Apr"). */
+function formatBriefingStripDate(d: Date): string {
+  const weekday = d.toLocaleDateString('en-NZ', { weekday: 'long' });
+  const day = d.getDate();
+  const month = d.toLocaleDateString('en-NZ', { month: 'short' });
+  return `${weekday} ${day} ${month}`;
+}
+
+/** Active application count target for Pipeline KPI delta; replace with firm-configured goal when available. */
+const KPI_PIPELINE_ACTIVE_TARGET = 30;
+/** Monthly settled loan value target for Settled KPI copy; replace with firm-configured goal when available. */
+const KPI_SETTLED_VALUE_TARGET = 2_800_000;
 
 function workflowKey(a: Application): string {
   const s = (a.status as string) || '';
@@ -133,13 +260,6 @@ function pctChange(current: number, previous: number): number | null {
   return Math.round(((current - previous) / previous) * 100);
 }
 
-function getTimeOfDay(): string {
-  const h = new Date().getHours();
-  if (h < 12) return 'morning';
-  if (h < 17) return 'afternoon';
-  return 'evening';
-}
-
 const FI_PREFILL_KEY = 'fi_prefill_message';
 
 interface SuggestionChip {
@@ -152,13 +272,13 @@ const Dashboard: React.FC<DashboardProps> = ({
   navigateToClient,
   navigateToApplication,
   advisor,
+  viewMode,
+  setViewMode,
 }) => {
   const { theme } = useTheme();
-  const { toast } = useToast();
   const chartTextColor = theme === 'dark' ? '#94A3B8' : '#64748B';
   const chartGridColor = theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
 
-  const [viewMode, setViewMode] = useState<'my' | 'firm'>('firm');
   const [allApplications, setAllApplications] = useState<Application[]>([]);
   const [allTasks, setAllTasks] = useState<Task[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -180,37 +300,86 @@ const Dashboard: React.FC<DashboardProps> = ({
     { loan_amount: number | null; current_rate_expiry_date: string | null; lender_name: string | null; client_id: string | null }[]
   >([]);
   const [briefingRefreshKey, setBriefingRefreshKey] = useState(0);
-  const [widgetLayout, setWidgetLayout] = useState<WidgetLayoutItem[]>(() => defaultWidgetLayout());
-  const [showCustomise, setShowCustomise] = useState(false);
   const [loading, setLoading] = useState(true);
   const [suggestions, setSuggestions] = useState<SuggestionChip[]>([
-    { label: '📊 Pipeline', message: 'Give me a pipeline summary' },
-    { label: '💰 Commission', message: 'What is my commission this month?' },
+    { label: 'Pipeline', message: 'Give me a pipeline summary' },
+    { label: 'Commission', message: 'What is my commission this month?' },
   ]);
+  const [briefingStripActiveCount, setBriefingStripActiveCount] = useState(0);
+  const [briefingStripAnomalyCount, setBriefingStripAnomalyCount] = useState(0);
+  const [briefingStripPipelineTotal, setBriefingStripPipelineTotal] = useState(0);
+  const [kpiAtRiskSum, setKpiAtRiskSum] = useState(0);
+  const [kpiAtRiskCount, setKpiAtRiskCount] = useState(0);
+  const [teamActiveAdvisers, setTeamActiveAdvisers] = useState(0);
+  const [teamTotalAdvisers, setTeamTotalAdvisers] = useState(0);
+  const [priorityQueueMerged, setPriorityQueueMerged] = useState<PriorityQueueMergedRow[]>([]);
 
   const loadDashboardData = useCallback(async () => {
     setLoading(true);
     try {
-      const [apps, tasks, clientList, advisorList, notes] = await Promise.all([
+      const firmId = advisor.firmId;
+      const today = new Date().toISOString().split('T')[0];
+      const in90 = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const thirtyDaysOut = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const msStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+      const prevMonth = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1);
+
+      let activeStripQuery = supabase
+        .from('applications')
+        .select('loan_amount')
+        .eq('firm_id', firmId)
+        .eq('status', 'active');
+      if (viewMode === 'my') {
+        activeStripQuery = activeStripQuery.eq('assigned_to', advisor.id);
+      }
+
+      const anomalyCountPromise =
+        viewMode === 'firm'
+          ? supabase
+              .from('anomaly_flags')
+              .select('id', { count: 'exact', head: true })
+              .eq('firm_id', firmId)
+              .eq('status', 'open')
+          : (async () => {
+              const appsRes = await supabase
+                .from('applications')
+                .select('id')
+                .eq('firm_id', firmId)
+                .eq('assigned_to', advisor.id);
+              if (appsRes.error) {
+                logger.log('Dashboard: scoped anomaly count (apps) failed', appsRes.error.message);
+                return { count: 0, error: null };
+              }
+              const ids = (appsRes.data ?? []).map((r) => r.id).filter(Boolean);
+              if (ids.length === 0) return { count: 0, error: null };
+              return supabase
+                .from('anomaly_flags')
+                .select('id', { count: 'exact', head: true })
+                .eq('firm_id', firmId)
+                .eq('status', 'open')
+                .in('application_id', ids);
+            })();
+
+      const [
+        apps,
+        tasks,
+        clientList,
+        advisorList,
+        notes,
+        ratesRes,
+        commRes,
+        refixRes,
+        activeStripRes,
+        teamUsersRes,
+        atRiskRes,
+        anomalyCountRes,
+        pqMerged,
+      ] = await Promise.all([
         crmService.getApplications(),
         crmService.getTasks(),
         crmService.getClients(),
         crmService.getAdvisors(),
         crmService.getNotes(),
-      ]);
-      setAllApplications(apps || []);
-      setAllTasks(tasks || []);
-      setClients(clientList || []);
-      setAdvisors(advisorList || []);
-      setRecentNotes((notes || []).slice(0, 5));
-
-      const firmId = advisor.firmId;
-      const today = new Date().toISOString().split('T')[0];
-      const in90 = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-      const msStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-      const prevMonth = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1);
-
-      const [ratesRes, commRes, refixRes] = await Promise.all([
         supabase
           .from('market_rates')
           .select('lender_name, rate_type, rate_percent')
@@ -226,7 +395,59 @@ const Dashboard: React.FC<DashboardProps> = ({
           .in('current_rate_type', [...FIXED_RATE_TYPES])
           .gte('current_rate_expiry_date', today)
           .lte('current_rate_expiry_date', in90),
+        activeStripQuery,
+        supabase.from('users').select('status, role').eq('firm_id', firmId).eq('role', 'adviser'),
+        supabase
+          .from('commissions')
+          .select('clawback_amount')
+          .eq('firm_id', firmId)
+          .not('clawback_amount', 'is', null)
+          .lte('clawback_risk_until', thirtyDaysOut),
+        anomalyCountPromise,
+        fetchPriorityQueueMerged(firmId, viewMode, advisor.id),
       ]);
+
+      setAllApplications(apps || []);
+      setAllTasks(tasks || []);
+      setClients(clientList || []);
+      setAdvisors(advisorList || []);
+      setRecentNotes((notes || []).slice(0, 5));
+      setPriorityQueueMerged(pqMerged);
+
+      const stripRows = activeStripRes.data ?? [];
+      setBriefingStripActiveCount(stripRows.length);
+      setBriefingStripPipelineTotal(
+        stripRows.reduce((s, r: { loan_amount?: number | null }) => s + Number(r.loan_amount ?? 0), 0),
+      );
+      setBriefingStripAnomalyCount(anomalyCountRes.error ? 0 : anomalyCountRes.count ?? 0);
+
+      const teamRows = (teamUsersRes.data ?? []) as { status?: string | null; role?: string | null }[];
+      if (!teamUsersRes.error && teamRows.length > 0) {
+        setTeamTotalAdvisers(teamRows.length);
+        setTeamActiveAdvisers(teamRows.filter((u) => u.status === 'active').length);
+      } else {
+        if (teamUsersRes.error) {
+          logger.log('Team capacity: users query unavailable; using advisors + applications', teamUsersRes.error.message);
+        }
+        const cap = teamCapacityFromAdvisorsAndApps(
+          (apps || []) as Application[],
+          (advisorList || []) as Advisor[],
+          firmId,
+        );
+        setTeamActiveAdvisers(cap.active);
+        setTeamTotalAdvisers(cap.total);
+      }
+
+      if (atRiskRes.error) {
+        logger.log('KPI at risk: commissions clawback query failed', atRiskRes.error.message);
+        setKpiAtRiskSum(0);
+        setKpiAtRiskCount(0);
+      } else {
+        const atRiskRows = (atRiskRes.data ?? []) as { clawback_amount?: number | null }[];
+        const totalAtRisk = atRiskRows.reduce((s, r) => s + Number(r.clawback_amount ?? 0), 0);
+        setKpiAtRiskSum(totalAtRisk);
+        setKpiAtRiskCount(atRiskRows.length);
+      }
 
       setMarketRatesRows(ratesRes.data || []);
 
@@ -267,33 +488,13 @@ const Dashboard: React.FC<DashboardProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [advisor.firmId]);
+  }, [advisor.firmId, advisor.id, viewMode]);
 
   // useAutoRefresh(loadDashboardData, 30);
 
   useEffect(() => {
     void loadDashboardData();
   }, [loadDashboardData]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user || cancelled) return;
-      const { data } = await supabase
-        .from('dashboard_preferences')
-        .select('widget_layout')
-        .eq('advisor_id', user.id)
-        .maybeSingle();
-      if (cancelled) return;
-      if (data?.widget_layout) {
-        setWidgetLayout(normalizeWidgetOrder(mergeWidgetLayout(data.widget_layout)));
-      } else {
-        setWidgetLayout(defaultWidgetLayout());
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [advisor.id]);
 
   const loadSuggestions = useCallback(async () => {
     try {
@@ -313,13 +514,13 @@ const Dashboard: React.FC<DashboardProps> = ({
           alerts.map((a) => {
             switch (a.insight_type) {
               case 'rate_opportunity':
-                return { label: '📈 Rate opportunities', message: 'Show me all rate opportunities' };
+                return { label: 'Rate opportunities', message: 'Show me all rate opportunities' };
               case 'refix_opportunity':
-                return { label: '🔄 Rate refixes', message: 'Which clients have rate refixes due?' };
+                return { label: 'Rate refixes', message: 'Which clients have rate refixes due?' };
               case 'stale_application':
-                return { label: '⏸ Stale applications', message: 'Show me stale applications' };
+                return { label: 'Stale applications', message: 'Show me stale applications' };
               default:
-                return { label: '⚠ Review alerts', message: 'Show me my open alerts' };
+                return { label: 'Review alerts', message: 'Show me my open alerts' };
             }
           }),
         );
@@ -332,82 +533,6 @@ const Dashboard: React.FC<DashboardProps> = ({
   useEffect(() => {
     void loadSuggestions();
   }, [loadSuggestions]);
-
-  const persistWidgetLayout = useCallback(
-    async (layout: WidgetLayoutItem[]) => {
-      const normalized = normalizeWidgetOrder(layout);
-      setWidgetLayout(normalized);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      await supabase.from('dashboard_preferences').upsert(
-        {
-          advisor_id: user.id,
-          firm_id: advisor.firmId,
-          widget_layout: normalized,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'advisor_id' },
-      );
-    },
-    [advisor.firmId],
-  );
-
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over || active.id === over.id) return;
-      const vis = widgetLayout.filter((w) => w.visible).sort((a, b) => a.order - b.order);
-      const oldIndex = vis.findIndex((w) => w.id === active.id);
-      const newIndex = vis.findIndex((w) => w.id === over.id);
-      if (oldIndex < 0 || newIndex < 0) return;
-      const reorderedVisible = arrayMove(vis, oldIndex, newIndex);
-      const invisible = widgetLayout.filter((w) => !w.visible).sort((a, b) => a.order - b.order);
-      const combined = [...reorderedVisible, ...invisible];
-      const next = combined.map((w, i) => ({ ...w, order: i + 1 }));
-      void persistWidgetLayout(next);
-    },
-    [widgetLayout, persistWidgetLayout],
-  );
-
-  const toggleWidgetVisible = useCallback(
-    (id: WidgetId, visible: boolean) => {
-      const next = widgetLayout.map((w) => (w.id === id ? { ...w, visible } : w));
-      void persistWidgetLayout(next);
-    },
-    [widgetLayout, persistWidgetLayout],
-  );
-
-  const resetWidgetLayoutToDefault = useCallback(async () => {
-    const defaults = defaultWidgetLayout();
-    setWidgetLayout(defaults);
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      await supabase.from('dashboard_preferences').upsert(
-        {
-          advisor_id: user.id,
-          firm_id: advisor.firmId,
-          widget_layout: defaults,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'advisor_id' },
-      );
-    }
-
-    setShowCustomise(false);
-    toast.success('Dashboard reset to default layout');
-  }, [advisor.firmId, toast]);
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 8 },
-    }),
-  );
-
-  const visibleWidgets = useMemo(
-    () => widgetLayout.filter((w) => w.visible).sort((a, b) => a.order - b.order),
-    [widgetLayout],
-  );
 
   const viewFilteredApplications = useMemo(() => {
     if (viewMode === 'my') return allApplications.filter((a) => a.advisorId === advisor.id);
@@ -673,8 +798,6 @@ const Dashboard: React.FC<DashboardProps> = ({
     }).length;
   }, [refixRows]);
 
-  const greetingAlertCount = useMemo(() => refixUrgentCount, [refixUrgentCount]);
-
   const clientNamesById = useMemo(() => {
     const map: Record<string, string> = {};
     clients.forEach((c) => { map[c.id] = c.name; });
@@ -724,10 +847,19 @@ const Dashboard: React.FC<DashboardProps> = ({
   const firmId = advisor.firmId;
   const advisorId = advisor.id;
 
-  const firstName = advisor.name?.split(' ')[0] || 'there';
-
   const refixDaysLeft = (expiry: string) =>
     Math.ceil((new Date(expiry).getTime() - Date.now()) / 86400000);
+
+  const refixNextDaysMin = useMemo(() => {
+    if (!refixRows.length) return null;
+    const days = refixRows
+      .map((r) => {
+        const d = r.current_rate_expiry_date;
+        return d ? refixDaysLeft(d) : NaN;
+      })
+      .filter((n) => !Number.isNaN(n) && n >= 0);
+    return days.length ? Math.min(...days) : null;
+  }, [refixRows]);
 
   const navigateToFI = (prefillMessage?: string) => {
     if (prefillMessage) {
@@ -735,6 +867,159 @@ const Dashboard: React.FC<DashboardProps> = ({
     }
     setCurrentView('flow-intelligence');
   };
+
+  /** Navigates to Applications with a list preset applied on arrival. */
+  const openApplicationsDrill = useCallback(
+    (preset: AppListPreset) => {
+      stashApplicationsListPreset(preset);
+      setCurrentView('applications');
+    },
+    [setCurrentView],
+  );
+
+  /** Navigates to Commission with register filter (expected or clawback context). */
+  const openCommissionDrill = useCallback(
+    (preset: CommissionListPreset) => {
+      stashCommissionListPreset(preset);
+      setCurrentView('commission');
+    },
+    [setCurrentView],
+  );
+
+  const briefingMetrics = useMemo((): FlowBriefingMetric[] => {
+    return [
+      {
+        id: 'bf-pipeline',
+        label: 'pipeline',
+        value: formatCurrency(totalPipelineValue),
+        onDrill: () => openApplicationsDrill('pipeline_active'),
+      },
+      {
+        id: 'bf-active',
+        label: 'active',
+        value: String(activeApplicationsCount),
+        onDrill: () => openApplicationsDrill('pipeline_active'),
+      },
+      {
+        id: 'bf-tasks',
+        label: 'tasks today',
+        value: String(tasksDueTodayCount),
+        onDrill: () => setCurrentView('tasks'),
+      },
+      {
+        id: 'bf-comm',
+        label: 'comm expected',
+        value: formatCurrency(commissionExpected),
+        onDrill: () => openCommissionDrill('expected'),
+      },
+      {
+        id: 'bf-refix',
+        label: 'refix 90d',
+        value: String(refixRows.length),
+        onDrill: () => setCurrentView('trail-book'),
+      },
+      {
+        id: 'bf-claw',
+        label: 'clawback exp.',
+        value: formatCurrency(clawbackRiskAmt),
+        onDrill: () => openCommissionDrill('clawback'),
+      },
+    ];
+  }, [
+    activeApplicationsCount,
+    clawbackRiskAmt,
+    commissionExpected,
+    formatCurrency,
+    openApplicationsDrill,
+    openCommissionDrill,
+    refixRows.length,
+    setCurrentView,
+    tasksDueTodayCount,
+    totalPipelineValue,
+  ]);
+
+  const settledPctOfValueTarget = useMemo(() => {
+    if (KPI_SETTLED_VALUE_TARGET <= 0) return 0;
+    return Math.min(999, Math.round((settledValueThisMonth / KPI_SETTLED_VALUE_TARGET) * 100));
+  }, [settledValueThisMonth]);
+
+  const kpiDeck: DashboardKpiDeckProps = useMemo(
+    () => ({
+      loading,
+      pipeline: {
+        activeCount: briefingStripActiveCount,
+        targetCount: KPI_PIPELINE_ACTIVE_TARGET,
+        sparkline7: sparklineActiveTouchesByDay(viewFilteredApplications, 7),
+        onDrill: () => openApplicationsDrill('pipeline_active'),
+      },
+      settled: {
+        dealsCount: settledThisMonthCount,
+        percentOfValueTarget: settledPctOfValueTarget,
+        targetAmount: KPI_SETTLED_VALUE_TARGET,
+        sparkline30: sparklineSettledDealsByDay(viewFilteredApplications, 30),
+        formatCurrency,
+        onDrill: () => openApplicationsDrill('settled_this_month'),
+      },
+      atRisk: {
+        sumGross: kpiAtRiskSum,
+        rowCount: kpiAtRiskCount,
+        formatCurrency,
+        onDrill: () => openCommissionDrill('clawback'),
+      },
+      teamCapacity:
+        teamTotalAdvisers >= 5
+          ? {
+              activeAdvisers: teamActiveAdvisers,
+              totalAdvisers: teamTotalAdvisers,
+              onDrill: () => openApplicationsDrill('live_files'),
+            }
+          : null,
+    }),
+    [
+      briefingStripActiveCount,
+      formatCurrency,
+      kpiAtRiskCount,
+      kpiAtRiskSum,
+      loading,
+      openApplicationsDrill,
+      openCommissionDrill,
+      settledPctOfValueTarget,
+      settledThisMonthCount,
+      teamActiveAdvisers,
+      teamTotalAdvisers,
+      viewFilteredApplications,
+    ],
+  );
+
+  /** Pre-merged rows for `PriorityQueue` (parent sort already applied in fetch). */
+  const priorityQueueApplications = useMemo((): ApplicationRow[] => {
+    return priorityQueueMerged.map((m) => {
+      const r = m.readiness;
+      const readiness =
+        r == null || r.total_score == null || Number.isNaN(Number(r.total_score))
+          ? null
+          : {
+              total_score: Math.round(Number(r.total_score)),
+              score_grade: r.score_grade || '',
+              is_ready_to_submit: Boolean(r.is_ready_to_submit),
+            };
+      const c = m.client;
+      return {
+        id: m.id,
+        reference_number: (m.reference_number || '').trim(),
+        loan_amount: Number(m.loan_amount ?? 0),
+        status: (m.status || '').toString(),
+        workflow_stage: m.workflow_stage,
+        settlement_date: m.settlement_date,
+        assigned_to: m.assigned_to,
+        client: c
+          ? { first_name: c.first_name || '', last_name: c.last_name || '' }
+          : null,
+        readiness,
+        assigned_adviser_name: m.assigned_to ? advisorNamesById[m.assigned_to] ?? null : null,
+      };
+    });
+  }, [priorityQueueMerged, advisorNamesById]);
 
   const widgetParams: DashboardWidgetParams = {
     DS,
@@ -782,340 +1067,42 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   const renderWidget = (id: WidgetId) => renderDashboardWidget(id, widgetParams);
 
-  const isDark = theme === 'dark';
-
-  const kpiCards = [
-    {
-      label: 'Pipeline Value',
-      value: loading ? '—' : formatCurrency(totalPipelineValue),
-      pct: pipelineKpiTrendPct,
-      icon: '💼',
-      iconBg: isDark ? '#1E1B4B' : '#EEF2FF',
-    },
-    {
-      label: 'Settled This Month',
-      value: loading ? '—' : formatCurrency(settledValueThisMonth),
-      pct: settledKpiTrendPct,
-      icon: '✓',
-      iconBg: isDark ? '#052E16' : '#F0FDF4',
-    },
-    {
-      label: 'Commission Expected',
-      value: loading ? '—' : formatCurrency(commissionExpected),
-      pct: commissionKpiTrendPct,
-      icon: '💰',
-      iconBg: isDark ? '#292524' : '#FFFBEB',
-    },
-    {
-      label: 'Active Applications',
-      value: loading ? '—' : String(activeApplicationsCount),
-      pct: metricPctChanges.activePct,
-      icon: '📋',
-      iconBg: isDark ? '#0C1A2E' : '#F0F9FF',
-    },
-  ];
-
   return (
-    <div
-      className="min-h-full"
-      style={{ background: DS.bg, fontFamily: '"Plus Jakarta Sans", Inter, sans-serif', color: DS.text }}
-    >
-      <div style={{ maxWidth: 1600, margin: '0 auto' }}>
-        {/* ── Prodify page header ── */}
-        <div style={{ padding: '28px 32px 0px 32px', background: 'transparent' }}>
-          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4, fontWeight: 500, margin: '0 0 4px' }}>
-            {new Date().toLocaleDateString('en-NZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-          </p>
-
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
-            <div>
-              <h1 style={{
-                fontSize: 26, fontWeight: 800, color: 'var(--text-primary)',
-                margin: '0 0 4px', letterSpacing: '-0.02em',
-                fontFamily: 'Plus Jakarta Sans, sans-serif',
-              }}>
-                Good {getTimeOfDay()}, {firstName} 👋
-              </h1>
-              <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 20px' }}>
-                {tasksDueTodayCount > 0
-                  ? `You have ${tasksDueTodayCount} task${tasksDueTodayCount > 1 ? 's' : ''} due`
-                  : 'Your pipeline is up to date'}
-                {greetingAlertCount > 0
-                  ? ` and ${greetingAlertCount} alert${greetingAlertCount > 1 ? 's' : ''}`
-                  : ''}.
-              </p>
-            </div>
-
-            {advisor.role === 'admin' && (
-              <div
-                className="inline-flex rounded-full p-1 flex-shrink-0"
-                style={{ background: DS.card, boxShadow: DS.shadow, border: DS.border }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setViewMode('my')}
-                  className={`px-4 py-2 text-sm font-semibold rounded-full transition-colors ${viewMode === 'my' ? 'text-white' : ''}`}
-                  style={viewMode === 'my'
-                    ? { background: 'linear-gradient(135deg, var(--accent), var(--accent-end))' }
-                    : { color: DS.textMuted }}
-                >
-                  My View
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode('firm')}
-                  className={`px-4 py-2 text-sm font-semibold rounded-full transition-colors ${viewMode === 'firm' ? 'text-white' : ''}`}
-                  style={viewMode === 'firm'
-                    ? { background: 'linear-gradient(135deg, var(--accent), var(--accent-end))' }
-                    : { color: DS.textMuted }}
-                >
-                  Firm View
-                </button>
-              </div>
-            )}
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 28, flexWrap: 'wrap' }}>
-            <div className="fi-button-wrapper" onClick={() => navigateToFI()} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') navigateToFI(); }} style={{ cursor: 'pointer' }}>
-              <div className="fi-button-inner" style={{ padding: '8px 18px', gap: 8 }}>
-                <span style={{ fontSize: 13 }}>✦</span>
-                <span style={{
-                  fontSize: 13, fontWeight: 700,
-                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                }}>Ask Flow Intelligence</span>
-              </div>
-            </div>
-
-            {suggestions.map((s, i) => (
-              <button
-                key={i}
-                type="button"
-                onClick={() => navigateToFI(s.message)}
-                style={{
-                  fontSize: 12, fontWeight: 500,
-                  color: 'var(--text-secondary)',
-                  background: 'var(--bg-card)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: 20, padding: '7px 14px',
-                  cursor: 'pointer', transition: 'all 0.15s',
-                  boxShadow: 'var(--shadow-card)',
-                  whiteSpace: 'nowrap',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = '#6366f1';
-                  e.currentTarget.style.color = '#6366f1';
-                  e.currentTarget.style.background = 'var(--accent-soft)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--border-color)';
-                  e.currentTarget.style.color = 'var(--text-secondary)';
-                  e.currentTarget.style.background = 'var(--bg-card)';
-                }}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
+    <div className="min-h-full" style={{ fontFamily: '"Plus Jakarta Sans", Inter, sans-serif', color: DS.text }}>
+      <FirmDashboardPage
+        loading={loading}
+        briefingDateLabel={formatBriefingStripDate(new Date())}
+        briefingActiveCount={briefingStripActiveCount}
+        briefingAnomalyCount={briefingStripAnomalyCount}
+        briefingPipelineDisplay={formatCurrency(briefingStripPipelineTotal)}
+        briefingPipelineSubtitle={viewMode === 'firm' ? 'Firm pipeline' : 'Your pipeline'}
+        onBriefingDrillActive={() => openApplicationsDrill('pipeline_active')}
+        onBriefingDrillAttention={() =>
+          navigateToFI('List all open anomaly flags (status = open) for the firm')
+        }
+        onBriefingDrillPipeline={() => openApplicationsDrill('pipeline_active')}
+        flowReviewedApplications={viewFilteredApplications.length}
+        flowNeedAttentionCount={briefingStripAnomalyCount}
+        flowRefixCount={refixRows.length}
+        flowRefixNextDays={refixNextDaysMin}
+        briefingMetrics={briefingMetrics}
+        suggestions={suggestions}
+        onNavigateFI={() => navigateToFI()}
+        onNavigateFIWithMessage={(msg) => navigateToFI(msg)}
+        kpiDeck={kpiDeck}
+        firmId={advisor.firmId}
+        anomalyScopeAdviserId={viewMode === 'my' ? advisor.id : null}
+        priorityQueueLoading={loading}
+        priorityQueueApplications={priorityQueueApplications}
+        firmView={viewMode === 'firm'}
+        onApplicationOpen={navigateToApplication}
+        onBriefingAnomalyCountChange={setBriefingStripAnomalyCount}
+      >
+        <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
+          {renderWidget('pipeline')}
+          {renderWidget('commission')}
         </div>
-
-        {/* ── KPI cards ── */}
-        <div
-          className="dash-kpi-grid"
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(4, 1fr)',
-            gap: 16,
-            padding: '0 32px',
-            marginBottom: 24,
-          }}
-        >
-          {kpiCards.map((k) => (
-            <div
-              key={k.label}
-              style={{
-                background: 'var(--bg-card)',
-                borderRadius: 16,
-                padding: '20px 24px',
-                border: '1px solid var(--border-color)',
-                boxShadow: 'var(--shadow-card)',
-                minHeight: 110,
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'space-between',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <span style={{
-                  fontSize: 11, fontWeight: 700, color: 'var(--text-muted)',
-                  textTransform: 'uppercase', letterSpacing: '0.06em',
-                }}>
-                  {k.label}
-                </span>
-                <div style={{
-                  width: 32, height: 32, borderRadius: 8,
-                  background: k.iconBg,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 16,
-                }}>
-                  {k.icon}
-                </div>
-              </div>
-
-              {loading ? (
-                <div className="h-8 w-24 rounded animate-pulse" style={{ background: 'var(--border-color)' }} />
-              ) : (
-                <div style={{
-                  fontSize: 28, fontWeight: 800, color: 'var(--text-primary)',
-                  letterSpacing: '-0.02em', lineHeight: 1, marginBottom: 8,
-                }}>
-                  {k.value}
-                </div>
-              )}
-
-              {!loading && k.pct != null && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{
-                    fontSize: 11, fontWeight: 600,
-                    color: k.pct > 0 ? 'var(--success)' : k.pct < 0 ? 'var(--danger)' : 'var(--text-muted)',
-                  }}>
-                    {k.pct > 0 ? '↑' : k.pct < 0 ? '↓' : '→'} {k.pct > 0 ? '+' : ''}{k.pct}%
-                  </span>
-                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>vs last month</span>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-
-        {/* ── Customise button ── */}
-        <div style={{ padding: '0 32px', marginBottom: 16, display: 'flex', justifyContent: 'flex-end' }}>
-          <button
-            type="button"
-            onClick={() => setShowCustomise(true)}
-            style={{
-              fontSize: 12,
-              color: 'var(--text-secondary)',
-              background: 'var(--bg-card)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 8,
-              padding: '6px 14px',
-              cursor: 'pointer',
-            }}
-          >
-            ⊞ Customise
-          </button>
-        </div>
-
-        {/* ── Customise panel ── */}
-        {showCustomise && (
-          <>
-            <div
-              className="fixed inset-0 z-40 bg-black/40"
-              role="presentation"
-              aria-hidden
-              onClick={() => setShowCustomise(false)}
-            />
-            <div
-              className="fixed top-0 right-0 bottom-0 z-50 flex flex-col overflow-y-auto"
-              style={{
-                width: 320,
-                background: 'var(--bg-card)',
-                borderLeft: '1px solid var(--border-color)',
-                boxShadow: 'var(--shadow-card)',
-              }}
-            >
-              <div className="flex items-center justify-between p-4 border-b" style={{ borderColor: 'var(--border-color)' }}>
-                <h2 className="m-0 text-[15px] font-bold" style={{ color: 'var(--text-primary)' }}>
-                  Customise Dashboard
-                </h2>
-                <button
-                  type="button"
-                  onClick={() => setShowCustomise(false)}
-                  className="p-1.5 rounded-lg border-none cursor-pointer bg-transparent"
-                  style={{ color: 'var(--text-muted)' }}
-                  aria-label="Close"
-                >
-                  <Icon name="X" className="h-5 w-5" />
-                </button>
-              </div>
-              <div className="p-4 space-y-4 flex-1">
-                {WIDGET_CUSTOMISE_ORDER.map((wid) => {
-                  const w = widgetLayout.find((x) => x.id === wid);
-                  const on = w?.visible ?? true;
-                  return (
-                    <label key={wid} className="flex items-center justify-between gap-3 cursor-pointer">
-                      <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>{WIDGET_LABELS[wid]}</span>
-                      <input
-                        type="checkbox"
-                        checked={on}
-                        onChange={(e) => toggleWidgetVisible(wid, e.target.checked)}
-                        className="h-4 w-4 accent-indigo-600"
-                      />
-                    </label>
-                  );
-                })}
-              </div>
-              <div className="p-4 border-t" style={{ borderColor: 'var(--border-color)' }}>
-                <button
-                  type="button"
-                  onClick={() => resetWidgetLayoutToDefault()}
-                  className="w-full py-2.5 rounded-lg text-[13px] font-semibold border-none cursor-pointer"
-                  style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}
-                >
-                  Reset to default
-                </button>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* ── Widget grid ── */}
-        <style>{`
-          @media (max-width: 767px) {
-            .dash-widget-slot {
-              grid-column: 1 / -1 !important;
-            }
-          }
-          @media (max-width: 1023px) {
-            .dash-kpi-grid {
-              grid-template-columns: repeat(2, 1fr) !important;
-            }
-          }
-          @media (max-width: 639px) {
-            .dash-kpi-grid {
-              grid-template-columns: 1fr !important;
-            }
-          }
-        `}</style>
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <SortableContext items={visibleWidgets.map((w) => w.id)} strategy={rectSortingStrategy}>
-            <div
-              className="dashboard-dnd-grid min-w-0"
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(12, minmax(0, 1fr))',
-                gap: 16,
-                padding: '0 32px',
-                paddingBottom: 32,
-              }}
-            >
-              {visibleWidgets.length === 0 ? (
-                <p className="col-span-full" style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                  No widgets visible. Use Customise to show cards.
-                </p>
-              ) : (
-                visibleWidgets.map((w) => (
-                  <SortableDashboardWidget key={w.id} id={w.id} size={w.size}>
-                    {renderWidget(w.id)}
-                  </SortableDashboardWidget>
-                ))
-              )}
-            </div>
-          </SortableContext>
-        </DndContext>
-      </div>
+      </FirmDashboardPage>
     </div>
   );
 };
